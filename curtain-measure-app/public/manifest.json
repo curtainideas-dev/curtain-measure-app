@@ -1,0 +1,16 @@
+{
+  "name": "Check Measures",
+  "short_name": "Measures",
+  "description": "Curtains & blinds window measurement recorder",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#f6f1eb",
+  "theme_color": "#b45309",
+  "icons": [
+    {
+      "src": "/favicon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml"
+    }
+  ]
+}

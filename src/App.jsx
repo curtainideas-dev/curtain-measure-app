@@ -341,6 +341,10 @@ textarea.field-input { resize: vertical; min-height: 80px; line-height: 1.5; }
   from { opacity: 0; transform: translateX(-50%) translateY(20px); }
   to { opacity: 1; transform: translateX(-50%) translateY(0); }
 }
+@keyframes spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
 
 /* Sync Success Overlay */
 .sync-overlay {
@@ -524,6 +528,8 @@ export default function App() {
   const [syncSuccess, setSyncSuccess] = useState(null);
   const [leads, setLeads] = useState([]);
   const [showAddLead, setShowAddLead] = useState(false);
+  const [lastRefresh, setLastRefresh] = useState(null);
+  const [refreshing, setRefreshing] = useState(false);
 
   // Fetch "In Progress" leads from Supabase
   const fetchLeads = async () => {
@@ -549,23 +555,11 @@ export default function App() {
     }
   };
 
-  // Load from localStorage on mount, then fetch from Supabase
-  useEffect(() => {
-    // Load local first
-    let localJobs = [];
+  // Fetch jobs from Supabase and merge with local
+  const fetchFromSupabase = useCallback(async () => {
+    if (!SUPABASE_URL || !SUPABASE_ANON_KEY) return;
     try {
-      const saved = localStorage.getItem("cmb_jobs");
-      if (saved) {
-        localJobs = JSON.parse(saved);
-        setJobs(localJobs);
-      }
-    } catch {}
-
-    // Then fetch from Supabase and merge
-    const fetchFromSupabase = async () => {
-      if (!SUPABASE_URL || !SUPABASE_ANON_KEY) return;
-      try {
-        const res = await fetch(
+      const res = await fetch(
           `${SUPABASE_URL}/rest/v1/check_measures?select=*,leads(id,name,phone,email,street,suburb,postcode)&order=created_at.desc`,
           {
             headers: {
@@ -576,11 +570,24 @@ export default function App() {
         );
         if (!res.ok) return;
         const remoteRows = await res.json();
-        if (!Array.isArray(remoteRows) || remoteRows.length === 0) return;
+        if (!Array.isArray(remoteRows)) return;
+
+        // If Supabase has zero rows, remove all local synced jobs
+        if (remoteRows.length === 0) {
+          setJobs((prev) => prev.filter((j) => !j.synced));
+          setSupabaseConnected(true);
+          setLastRefresh(new Date());
+          return;
+        }
 
         setJobs((prev) => {
-          const localIds = new Set(prev.map((j) => j.id));
-          const merged = [...prev];
+          const remoteIds = new Set(remoteRows.map((r) => r.id));
+          
+          // Remove local synced jobs that no longer exist in Supabase (deleted on another device)
+          const filtered = prev.filter((j) => !j.synced || remoteIds.has(j.id));
+          
+          const localIds = new Set(filtered.map((j) => j.id));
+          const merged = [...filtered];
 
           for (const row of remoteRows) {
             if (!localIds.has(row.id)) {
@@ -619,20 +626,45 @@ export default function App() {
         });
 
         setSupabaseConnected(true);
+        setLastRefresh(new Date());
       } catch (err) {
         console.error("Supabase fetch error:", err);
       }
-    };
+  }, []);
+
+  // Manual refresh
+  const manualRefresh = useCallback(async () => {
+    setRefreshing(true);
+    await Promise.all([fetchFromSupabase(), fetchLeads()]);
+    setRefreshing(false);
+  }, [fetchFromSupabase]);
+
+  // Load from localStorage on mount, then fetch from Supabase
+  useEffect(() => {
+    try {
+      const saved = localStorage.getItem("cmb_jobs");
+      if (saved) setJobs(JSON.parse(saved));
+    } catch {}
 
     fetchFromSupabase();
     fetchLeads();
+
+    // Poll every 30 seconds
+    const interval = setInterval(() => {
+      fetchFromSupabase();
+      fetchLeads();
+    }, 30000);
 
     setIsOnline(navigator.onLine);
     const on = () => setIsOnline(true);
     const off = () => setIsOnline(false);
     window.addEventListener("online", on);
     window.addEventListener("offline", off);
-    return () => { window.removeEventListener("online", on); window.removeEventListener("offline", off); };
+    return () => {
+      clearInterval(interval);
+      window.removeEventListener("online", on);
+      window.removeEventListener("offline", off);
+    };
   }, []);
 
   // Persist to localStorage
@@ -870,9 +902,21 @@ export default function App() {
             <div className="header">
               <div className="header-title">Check Measures</div>
               <div className="header-actions">
-                <span className={`conn-status ${isOnline ? "conn-online" : "conn-offline"}`}>
-                  {isOnline ? "● Online" : "● Offline"}
-                </span>
+                <button
+                  className="btn btn-ghost"
+                  style={{ display: "flex", alignItems: "center", gap: 6, color: "rgba(255,255,255,0.7)", fontSize: 12, fontWeight: 500 }}
+                  onClick={manualRefresh}
+                  disabled={refreshing}
+                >
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"
+                    style={{ animation: refreshing ? "spin 1s linear infinite" : "none" }}>
+                    <polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 11-2.12-9.36L23 10"/>
+                  </svg>
+                  {lastRefresh
+                    ? lastRefresh.toLocaleTimeString("en-AU", { hour: "numeric", minute: "2-digit", second: "2-digit", hour12: true })
+                    : "—"
+                  }
+                </button>
               </div>
             </div>
             <div className="scroll-area">

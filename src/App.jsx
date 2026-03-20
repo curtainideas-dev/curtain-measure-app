@@ -1150,15 +1150,16 @@ export default function App() {
             // Upload main photo if base64
             if (w.main_photo && w.main_photo.startsWith("data:")) {
               console.log("[AUTO-SYNC] Uploading main photo for window", w.id);
-              const url = await uploadPhoto(w.main_photo, `${job.id}/${w.id}/main.jpg`);
-              if (url) mainPhotoUrl = url;
+              const ts = Date.now();
+              const url = await uploadPhoto(w.main_photo, `${job.id}/${w.id}/main_${ts}.jpg`);              if (url) mainPhotoUrl = url;
             }
 
             // Upload extra photos if base64
             for (let i = 0; i < (w.extra_photos?.length || 0); i++) {
               if (w.extra_photos[i] && w.extra_photos[i].startsWith("data:")) {
                 console.log("[AUTO-SYNC] Uploading extra photo", i, "for window", w.id);
-                const url = await uploadPhoto(w.extra_photos[i], `${job.id}/${w.id}/extra_${i}.jpg`);
+                const ets = Date.now();
+                const url = await uploadPhoto(w.extra_photos[i], `${job.id}/${w.id}/extra_${i}_${ets}.jpg`);
                 if (url) extraPhotoUrls[i] = url;
               } else if (w.extra_photos[i] && !w.extra_photos[i].startsWith("data:")) {
                 // Already a URL, keep it
@@ -1448,14 +1449,16 @@ export default function App() {
         // Upload main photo if it's a base64 string (not already a URL)
         if (w.main_photo && w.main_photo.startsWith("data:")) {
           showToast("Uploading photos...");
-          const url = await uploadPhoto(w.main_photo, `${job.id}/${w.id}/main.jpg`);
+          const mts = Date.now();
+          const url = await uploadPhoto(w.main_photo, `${job.id}/${w.id}/main_${mts}.jpg`);
           if (url) mainPhotoUrl = url;
         }
 
         // Upload extra photos
         for (let i = 0; i < w.extra_photos.length; i++) {
           if (w.extra_photos[i] && w.extra_photos[i].startsWith("data:")) {
-            const url = await uploadPhoto(w.extra_photos[i], `${job.id}/${w.id}/extra_${i}.jpg`);
+            const ets = Date.now();
+            const url = await uploadPhoto(w.extra_photos[i], `${job.id}/${w.id}/extra_${i}_${ets}.jpg`);
             if (url) extraPhotoUrls[i] = url;
           }
         }

@@ -595,8 +595,10 @@ export default function App() {
               const windows = (Array.isArray(row.measurements_json) ? row.measurements_json : []).map((w) => ({
                 id: w.id || crypto.randomUUID?.() || `${Date.now()}-${Math.random().toString(36).slice(2,9)}`,
                 label: w.label || "Window",
-                main_photo: null,
-                extra_photos: [],
+                main_photo: w.main_photo_url || null,
+                main_photo_url: w.main_photo_url || null,
+                extra_photos: w.extra_photo_urls || [],
+                extra_photo_urls: w.extra_photo_urls || [],
                 measurements: w.measurements || {},
                 comments: w.comments || "",
               }));
@@ -828,6 +830,28 @@ export default function App() {
   };
 
   // ---- Sync to Supabase ----
+  // Upload a base64 data URL to Supabase Storage, returns public URL
+  const uploadPhoto = async (base64DataUrl, path) => {
+    // Convert base64 to blob
+    const res = await fetch(base64DataUrl);
+    const blob = await res.blob();
+    const uploadRes = await fetch(`${SUPABASE_URL}/storage/v1/object/window-photos/${path}`, {
+      method: "POST",
+      headers: {
+        apikey: SUPABASE_ANON_KEY,
+        Authorization: `Bearer ${SUPABASE_ANON_KEY}`,
+        "Content-Type": blob.type || "image/jpeg",
+        "x-upsert": "true",
+      },
+      body: blob,
+    });
+    if (!uploadRes.ok) {
+      console.error("Photo upload failed:", uploadRes.status, await uploadRes.text());
+      return null;
+    }
+    return `${SUPABASE_URL}/storage/v1/object/public/window-photos/${path}`;
+  };
+
   const syncJob = async (jobId) => {
     const job = jobs.find((j) => j.id === jobId);
     if (!job) return;
@@ -836,15 +860,36 @@ export default function App() {
       return;
     }
     try {
-      // Strip base64 photos from the sync payload (too large for DB)
-      const windowsSummary = job.windows.map((w) => ({
-        id: w.id,
-        label: w.label,
-        measurements: w.measurements,
-        comments: w.comments,
-        has_main_photo: !!w.main_photo,
-        extra_photo_count: w.extra_photos.length,
-      }));
+      // Upload photos for each window
+      const windowsSummary = [];
+      for (const w of job.windows) {
+        let mainPhotoUrl = w.main_photo_url || null;
+        const extraPhotoUrls = [...(w.extra_photo_urls || [])];
+
+        // Upload main photo if it's a base64 string (not already a URL)
+        if (w.main_photo && w.main_photo.startsWith("data:")) {
+          showToast("Uploading photos...");
+          const url = await uploadPhoto(w.main_photo, `${job.id}/${w.id}/main.jpg`);
+          if (url) mainPhotoUrl = url;
+        }
+
+        // Upload extra photos
+        for (let i = 0; i < w.extra_photos.length; i++) {
+          if (w.extra_photos[i] && w.extra_photos[i].startsWith("data:")) {
+            const url = await uploadPhoto(w.extra_photos[i], `${job.id}/${w.id}/extra_${i}.jpg`);
+            if (url) extraPhotoUrls[i] = url;
+          }
+        }
+
+        windowsSummary.push({
+          id: w.id,
+          label: w.label,
+          measurements: w.measurements,
+          comments: w.comments,
+          main_photo_url: mainPhotoUrl,
+          extra_photo_urls: extraPhotoUrls,
+        });
+      }
 
       const payload = {
         id: job.id,
@@ -874,7 +919,16 @@ export default function App() {
         throw new Error(`Sync failed (${res.status}): ${errBody}`);
       }
 
-      setJobs((prev) => prev.map((j) => (j.id === jobId ? { ...j, synced: true } : j)));
+      // Update local jobs with the cloud URLs so we don't re-upload next time
+      setJobs((prev) => prev.map((j) => {
+        if (j.id !== jobId) return j;
+        const updatedWindows = j.windows.map((w, i) => ({
+          ...w,
+          main_photo_url: windowsSummary[i]?.main_photo_url || null,
+          extra_photo_urls: windowsSummary[i]?.extra_photo_urls || [],
+        }));
+        return { ...j, windows: updatedWindows, synced: true };
+      }));
       setSupabaseConnected(true);
       setSyncSuccess(job.lead_name || "Job");
       setTimeout(() => setSyncSuccess(null), 2500);
@@ -1311,6 +1365,16 @@ function WindowDetail({ job, window: win, windowIdx, totalWindows, onBack, onUpd
                   >
                     <Icons.Camera size={14} /> Replace
                   </button>
+                  <button
+                    className="btn btn-ghost"
+                    style={{ background: "rgba(220,38,38,0.8)", color: "#fff", borderRadius: 8, padding: "6px 10px", fontSize: 12 }}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      if (confirm("Remove this photo?")) onUpdate({ main_photo: null, main_photo_url: null });
+                    }}
+                  >
+                    <Icons.Trash size={14} /> Remove
+                  </button>
                 </div>
               </>
             ) : (
@@ -1336,7 +1400,7 @@ function WindowDetail({ job, window: win, windowIdx, totalWindows, onBack, onUpd
               {win.extra_photos.map((url, idx) => (
                 <div className="photo-thumb" key={idx} onClick={() => setDrawingPhoto({ src: url, target: idx })}>
                   <img src={url} alt="" />
-                  <div className="photo-thumb-remove" onClick={(e) => { e.stopPropagation(); removeExtraPhoto(idx); }}>×</div>
+                  <div className="photo-thumb-remove" onClick={(e) => { e.stopPropagation(); if (confirm("Remove this photo?")) removeExtraPhoto(idx); }}>×</div>
                 </div>
               ))}
               <div className="photo-add-small" onClick={() => extraPhotoRef.current?.click()}>

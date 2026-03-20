@@ -1013,6 +1013,8 @@ export default function App() {
                   const cloudMain = rw.main_photo_url || rw.main_photo || null;
                   const cloudExtras = rw.extra_photo_urls || rw.extra_photos || [];
 
+                  console.log("[MERGE] Window:", rw.id, "cloud main:", cloudMain?.substring(0, 50), "cloud extras:", cloudExtras.length, "local extras:", lw?.extra_photos?.length || 0);
+
                   // Only keep local base64 if cloud doesn't have it yet (not yet uploaded)
                   const localMainIsBase64 = lw?.main_photo && lw.main_photo.startsWith("data:");
                   const mainPhoto = localMainIsBase64 ? lw.main_photo : cloudMain;
@@ -1026,6 +1028,8 @@ export default function App() {
                       }
                     });
                   }
+
+                  console.log("[MERGE] Result - main:", mainPhoto?.substring(0, 50), "extras:", mergedExtras.length, mergedExtras.map(e => e?.substring(0, 40)));
 
                   return {
                     id: rw.id || genId(),
@@ -1141,8 +1145,11 @@ export default function App() {
             let mainPhotoUrl = w.main_photo_url || null;
             const extraPhotoUrls = [...(w.extra_photo_urls || [])];
 
+            console.log("[AUTO-SYNC] Window:", w.id, "main_photo type:", w.main_photo?.substring(0, 30), "extra_photos count:", w.extra_photos?.length || 0);
+
             // Upload main photo if base64
             if (w.main_photo && w.main_photo.startsWith("data:")) {
+              console.log("[AUTO-SYNC] Uploading main photo for window", w.id);
               const url = await uploadPhoto(w.main_photo, `${job.id}/${w.id}/main.jpg`);
               if (url) mainPhotoUrl = url;
             }
@@ -1150,12 +1157,16 @@ export default function App() {
             // Upload extra photos if base64
             for (let i = 0; i < (w.extra_photos?.length || 0); i++) {
               if (w.extra_photos[i] && w.extra_photos[i].startsWith("data:")) {
+                console.log("[AUTO-SYNC] Uploading extra photo", i, "for window", w.id);
                 const url = await uploadPhoto(w.extra_photos[i], `${job.id}/${w.id}/extra_${i}.jpg`);
                 if (url) extraPhotoUrls[i] = url;
-              } else if (!extraPhotoUrls[i] && w.extra_photos[i]) {
+              } else if (w.extra_photos[i] && !w.extra_photos[i].startsWith("data:")) {
+                // Already a URL, keep it
                 extraPhotoUrls[i] = w.extra_photos[i];
               }
             }
+
+            console.log("[AUTO-SYNC] Final URLs - main:", mainPhotoUrl?.substring(0, 50), "extras:", extraPhotoUrls.length);
 
             windowsSummary.push({
               id: w.id,
@@ -1391,24 +1402,33 @@ export default function App() {
   // ---- Sync to Supabase ----
   // Upload a base64 data URL to Supabase Storage, returns public URL
   const uploadPhoto = async (base64DataUrl, path) => {
-    // Convert base64 to blob
-    const res = await fetch(base64DataUrl);
-    const blob = await res.blob();
-    const uploadRes = await fetch(`${SUPABASE_URL}/storage/v1/object/window-photos/${path}`, {
-      method: "POST",
-      headers: {
-        apikey: SUPABASE_ANON_KEY,
-        Authorization: `Bearer ${SUPABASE_ANON_KEY}`,
-        "Content-Type": blob.type || "image/jpeg",
-        "x-upsert": "true",
-      },
-      body: blob,
-    });
-    if (!uploadRes.ok) {
-      console.error("Photo upload failed:", uploadRes.status, await uploadRes.text());
+    console.log("[PHOTO] Uploading to:", path);
+    try {
+      const res = await fetch(base64DataUrl);
+      const blob = await res.blob();
+      console.log("[PHOTO] Blob size:", blob.size, "type:", blob.type);
+      const uploadRes = await fetch(`${SUPABASE_URL}/storage/v1/object/window-photos/${path}`, {
+        method: "POST",
+        headers: {
+          apikey: SUPABASE_ANON_KEY,
+          Authorization: `Bearer ${SUPABASE_ANON_KEY}`,
+          "Content-Type": blob.type || "image/jpeg",
+          "x-upsert": "true",
+        },
+        body: blob,
+      });
+      if (!uploadRes.ok) {
+        const errText = await uploadRes.text();
+        console.error("[PHOTO] Upload failed:", uploadRes.status, errText);
+        return null;
+      }
+      const publicUrl = `${SUPABASE_URL}/storage/v1/object/public/window-photos/${path}`;
+      console.log("[PHOTO] Upload success:", publicUrl);
+      return publicUrl;
+    } catch (err) {
+      console.error("[PHOTO] Upload error:", err);
       return null;
     }
-    return `${SUPABASE_URL}/storage/v1/object/public/window-photos/${path}`;
   };
 
   const syncJob = async (jobId) => {

@@ -346,6 +346,10 @@ textarea.field-input { resize: vertical; min-height: 80px; line-height: 1.5; }
   from { transform: rotate(0deg); }
   to { transform: rotate(360deg); }
 }
+@keyframes refresh-flash {
+  0% { color: rgba(141,199,63,1); }
+  100% { color: rgba(255,255,255,0.7); }
+}
 
 /* Sync Success Overlay */
 .sync-overlay {
@@ -929,6 +933,7 @@ export default function App() {
   // Shared function to rebuild jobs from Supabase (used by both auto-poll and manual refresh)
   const hardSyncFromSupabase = useCallback(async () => {
     if (!SUPABASE_URL || !SUPABASE_ANON_KEY) return;
+    if (isSyncing.current) { console.log("[POLL] Skipped — auto-sync in progress"); return; }
     try {
       const res = await fetch(
         `${SUPABASE_URL}/rest/v1/check_measures?select=*,leads(id,name,phone,email,street,suburb,postcode,status)&order=created_at.desc`,
@@ -942,6 +947,8 @@ export default function App() {
       if (!res.ok) return;
       const remoteRows = await res.json();
       if (!Array.isArray(remoteRows)) return;
+
+      console.log("[POLL] Fetched", remoteRows.length, "jobs from Supabase");
 
       setJobs((prev) => {
         const remoteIds = new Set(remoteRows.map((r) => r.id));
@@ -975,6 +982,7 @@ export default function App() {
             }
 
             // Also keep any local-only windows not in cloud yet
+            console.log("[POLL] Window:", rw.id?.substring(0, 8), "cloud_main:", cloudMain ? "YES" : "null", "cloud_extras:", cloudExtras.length, "display_main:", mainPhoto ? "YES" : "null", "display_extras:", mergedExtras.length);
             return {
               id: rw.id || genId(),
               label: rw.label || "Window",
@@ -1071,12 +1079,11 @@ export default function App() {
   // Auto-sync: debounce 3 seconds after any job becomes unsynced
   const autoSyncTimer = useRef(null);
   const prevJobsRef = useRef(jobs);
+  const isSyncing = useRef(false);
 
   useEffect(() => {
-    // Find jobs that just became unsynced (weren't unsynced before)
     const prevUnsynced = new Set(prevJobsRef.current.filter((j) => !j.synced).map((j) => j.id));
-    const newUnsynced = jobs.filter((j) => !j.synced && j.lead_id && !prevUnsynced.has(j.id));
-    const allUnsynced = jobs.filter((j) => !j.synced && j.lead_id);
+    const allUnsynced = jobs.filter((j) => !j.synced);
     prevJobsRef.current = jobs;
 
     if (allUnsynced.length === 0) return;
@@ -1084,6 +1091,7 @@ export default function App() {
 
     clearTimeout(autoSyncTimer.current);
     autoSyncTimer.current = setTimeout(async () => {
+      isSyncing.current = true;
       for (const job of allUnsynced) {
         try {
           // Upload any base64 photos to Supabase Storage
@@ -1169,6 +1177,7 @@ export default function App() {
           console.error("Auto-sync failed for job:", job.id, err);
         }
       }
+      isSyncing.current = false;
     }, 3000);
 
     return () => clearTimeout(autoSyncTimer.current);
@@ -1379,6 +1388,31 @@ export default function App() {
     }
   };
 
+  // Delete a photo from Supabase Storage by its public URL
+  const deletePhotoFromStorage = async (publicUrl) => {
+    if (!publicUrl || !publicUrl.includes("/storage/v1/object/public/window-photos/")) return;
+    try {
+      // Extract the path after the bucket name
+      const path = publicUrl.split("/storage/v1/object/public/window-photos/")[1];
+      if (!path) return;
+      console.log("[PHOTO] Deleting from storage:", path);
+      const res = await fetch(`${SUPABASE_URL}/storage/v1/object/window-photos/${path}`, {
+        method: "DELETE",
+        headers: {
+          apikey: SUPABASE_ANON_KEY,
+          Authorization: `Bearer ${SUPABASE_ANON_KEY}`,
+        },
+      });
+      if (!res.ok) {
+        console.error("[PHOTO] Delete failed:", res.status, await res.text());
+      } else {
+        console.log("[PHOTO] Delete success:", path);
+      }
+    } catch (err) {
+      console.error("[PHOTO] Delete error:", err);
+    }
+  };
+
   const syncJob = async (jobId) => {
     const job = jobs.find((j) => j.id === jobId);
     if (!job) return;
@@ -1501,10 +1535,15 @@ export default function App() {
                     style={{ animation: refreshing ? "spin 1s linear infinite" : "none" }}>
                     <polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 11-2.12-9.36L23 10"/>
                   </svg>
-                  {lastRefresh
-                    ? lastRefresh.toLocaleTimeString("en-AU", { hour: "numeric", minute: "2-digit", second: "2-digit", hour12: true })
-                    : "—"
-                  }
+                  <span
+                    key={lastRefresh?.getTime() || 0}
+                    style={{ animation: lastRefresh ? "refresh-flash 1.5s ease" : "none" }}
+                  >
+                    {lastRefresh
+                      ? lastRefresh.toLocaleTimeString("en-AU", { hour: "numeric", minute: "2-digit", second: "2-digit", hour12: true })
+                      : "—"
+                    }
+                  </span>
                 </button>
               </div>
             </div>
@@ -1828,6 +1867,7 @@ export default function App() {
             onBack={() => setScreen("job")}
             onUpdate={(updates) => updateWindow(currentWindowIdx, updates)}
             onDelete={() => deleteWindow(currentWindowIdx)}
+            onDeletePhoto={deletePhotoFromStorage}
             readOnly={isHistory}
             onNext={() => {
               if (currentWindowIdx < currentJob.windows.length - 1) {
@@ -1901,7 +1941,7 @@ export default function App() {
 // ============================================================
 // WINDOW DETAIL VIEW
 // ============================================================
-function WindowDetail({ job, window: win, windowIdx, totalWindows, onBack, onUpdate, onDelete, readOnly, onNext, onPrev, showToast }) {
+function WindowDetail({ job, window: win, windowIdx, totalWindows, onBack, onUpdate, onDelete, onDeletePhoto, readOnly, onNext, onPrev, showToast }) {
   const mainPhotoRef = useRef(null);
   const extraPhotoRef = useRef(null);
   const [drawingPhoto, setDrawingPhoto] = useState(null);
@@ -1925,6 +1965,11 @@ function WindowDetail({ job, window: win, windowIdx, totalWindows, onBack, onUpd
   };
 
   const removeExtraPhoto = (idx) => {
+    // Delete from Supabase Storage if it's a URL
+    const photoToDelete = win.extra_photos?.[idx];
+    if (photoToDelete && !photoToDelete.startsWith("data:")) {
+      onDeletePhoto(photoToDelete);
+    }
     const updatedPhotos = (win.extra_photos || []).filter((_, i) => i !== idx);
     const updatedUrls = (win.extra_photo_urls || []).filter((_, i) => i !== idx);
     onUpdate({ extra_photos: updatedPhotos, extra_photo_urls: updatedUrls });
@@ -2185,6 +2230,9 @@ function WindowDetail({ job, window: win, windowIdx, totalWindows, onBack, onUpd
               <button className="btn btn-secondary" style={{ flex: 1 }} onClick={() => setConfirmDelete(null)}>Cancel</button>
               <button className="btn btn-danger" style={{ flex: 1 }} onClick={() => {
                 if (confirmDelete === "main") {
+                  // Delete from Supabase Storage if it's a URL
+                  if (win.main_photo_url) onDeletePhoto(win.main_photo_url);
+                  else if (win.main_photo && !win.main_photo.startsWith("data:")) onDeletePhoto(win.main_photo);
                   onUpdate({ main_photo: null, main_photo_url: null });
                 } else if (typeof confirmDelete === "number") {
                   removeExtraPhoto(confirmDelete);

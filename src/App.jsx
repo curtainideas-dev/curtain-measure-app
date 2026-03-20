@@ -106,6 +106,8 @@ const Icons = {
   Edit: (p) => <Icon {...p} d={<><path d="M11 4H4a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 013 3L12 15l-4 1 1-4 9.5-9.5z"/></>} />,
   Cloud: (p) => <Icon {...p} d={<><path d="M18 10h-1.26A8 8 0 109 20h9a5 5 0 000-10z"/></>} />,
   Window: (p) => <Icon {...p} d={<><rect x="2" y="3" width="20" height="18" rx="1"/><line x1="12" y1="3" x2="12" y2="21"/><line x1="2" y1="12" x2="22" y2="12"/></>} />,
+  Pen: (p) => <Icon {...p} d={<><path d="M12 19l7-7 3 3-7 7-3-3z"/><path d="M18 13l-1.5-7.5L2 2l3.5 14.5L13 18l5-5z"/><path d="M2 2l7.586 7.586"/><circle cx="11" cy="11" r="2"/></>} />,
+  Undo: (p) => <Icon {...p} d={<><polyline points="1 4 1 10 7 10"/><path d="M3.51 15a9 9 0 102.13-9.36L1 10"/></>} />,
 };
 
 // ============================================================
@@ -417,6 +419,55 @@ textarea.field-input { resize: vertical; min-height: 80px; line-height: 1.5; }
 .conn-online { background: var(--success-bg); color: var(--success); }
 .conn-offline { background: var(--danger-bg); color: var(--danger); }
 
+/* Drawing Editor */
+.draw-overlay {
+  position: fixed; inset: 0; z-index: 300;
+  background: #000; display: flex; flex-direction: column;
+}
+.draw-toolbar {
+  display: flex; align-items: center; gap: 8px;
+  padding: 12px 16px; background: #111;
+  flex-shrink: 0;
+}
+.draw-toolbar-title {
+  flex: 1; color: #fff; font-size: 14px; font-weight: 600;
+}
+.draw-btn {
+  display: flex; align-items: center; justify-content: center; gap: 6px;
+  padding: 8px 14px; border-radius: 8px; border: none; cursor: pointer;
+  font-size: 13px; font-weight: 600; font-family: inherit;
+}
+.draw-btn-tool {
+  background: #333; color: #fff;
+}
+.draw-btn-tool.active {
+  background: var(--accent); color: #fff;
+}
+.draw-btn-cancel { background: #333; color: #fff; }
+.draw-btn-save { background: var(--accent); color: #fff; }
+.draw-color-btn {
+  width: 28px; height: 28px; border-radius: 50%; border: 2px solid #444;
+  cursor: pointer; flex-shrink: 0; transition: border-color 0.15s;
+}
+.draw-color-btn.active { border-color: #fff; box-shadow: 0 0 0 2px rgba(255,255,255,0.3); }
+.draw-size-btn {
+  display: flex; align-items: center; justify-content: center;
+  width: 32px; height: 32px; border-radius: 50%; background: #333;
+  border: 2px solid #444; cursor: pointer; color: #fff;
+}
+.draw-size-btn.active { border-color: #fff; background: #555; }
+.draw-canvas-wrap {
+  flex: 1; display: flex; align-items: center; justify-content: center;
+  overflow: hidden; position: relative;
+}
+.draw-canvas-wrap canvas {
+  touch-action: none; max-width: 100%; max-height: 100%;
+}
+.draw-bottom-bar {
+  display: flex; align-items: center; justify-content: center; gap: 8px;
+  padding: 12px 16px; background: #111; flex-shrink: 0;
+}
+
 /* Utility */
 .scroll-area { flex: 1; overflow-y: auto; -webkit-overflow-scrolling: touch; padding-bottom: 80px; }
 .p-16 { padding: 16px; }
@@ -515,7 +566,7 @@ export default function App() {
       if (!SUPABASE_URL || !SUPABASE_ANON_KEY) return;
       try {
         const res = await fetch(
-          `${SUPABASE_URL}/rest/v1/check_measures?select=*&order=created_at.desc`,
+          `${SUPABASE_URL}/rest/v1/check_measures?select=*,leads(id,name,phone,email,street,suburb,postcode)&order=created_at.desc`,
           {
             headers: {
               apikey: SUPABASE_ANON_KEY,
@@ -533,7 +584,7 @@ export default function App() {
 
           for (const row of remoteRows) {
             if (!localIds.has(row.id)) {
-              // Rebuild job from Supabase data
+              const lead = row.leads || {};
               const windows = (Array.isArray(row.measurements_json) ? row.measurements_json : []).map((w) => ({
                 id: w.id || crypto.randomUUID?.() || `${Date.now()}-${Math.random().toString(36).slice(2,9)}`,
                 label: w.label || "Window",
@@ -545,9 +596,13 @@ export default function App() {
 
               merged.push({
                 id: row.id,
-                lead_name: row.lead_name || "",
-                address: row.address || "",
-                phone: row.phone || "",
+                lead_id: row.lead_id || null,
+                lead_name: lead.name || "",
+                phone: lead.phone || "",
+                email: lead.email || "",
+                street: lead.street || "",
+                suburb: lead.suburb || "",
+                postcode: lead.postcode || "",
                 measure_date: row.measure_date || "",
                 measure_time: row.measure_time || "",
                 windows,
@@ -637,9 +692,73 @@ export default function App() {
     setJobs((prev) => prev.map((j) => (j.id === id ? { ...j, ...updates, synced: false } : j)));
   };
 
-  const deleteJob = (id) => {
+  // Map local job fields to leads table column names
+  const LEAD_FIELD_MAP = {
+    lead_name: "name",
+    phone: "phone",
+    email: "email",
+    street: "street",
+    suburb: "suburb",
+    postcode: "postcode",
+    measure_date: "cm_date",
+  };
+
+  // Debounce timer ref for lead updates
+  const leadUpdateTimer = useRef(null);
+
+  const updateLeadField = (jobId, field, value) => {
+    // Update local job immediately
+    updateJob(jobId, { [field]: value });
+
+    // Debounce the Supabase update (wait 800ms after last keystroke)
+    const job = jobs.find((j) => j.id === jobId);
+    const leadId = job?.lead_id;
+    if (!leadId || !SUPABASE_URL || !SUPABASE_ANON_KEY) return;
+
+    const supabaseCol = LEAD_FIELD_MAP[field];
+    if (!supabaseCol) return;
+
+    clearTimeout(leadUpdateTimer.current);
+    leadUpdateTimer.current = setTimeout(async () => {
+      try {
+        const res = await fetch(
+          `${SUPABASE_URL}/rest/v1/leads?id=eq.${leadId}`,
+          {
+            method: "PATCH",
+            headers: {
+              apikey: SUPABASE_ANON_KEY,
+              Authorization: `Bearer ${SUPABASE_ANON_KEY}`,
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify({ [supabaseCol]: value }),
+          }
+        );
+        if (!res.ok) console.error("Lead update failed:", res.status);
+      } catch (err) {
+        console.error("Lead update error:", err);
+      }
+    }, 800);
+  };
+
+  const deleteJob = async (id) => {
     setJobs((prev) => prev.filter((j) => j.id !== id));
     if (currentJobId === id) { setCurrentJobId(null); setScreen("list"); }
+
+    // Also delete from Supabase if connected
+    if (SUPABASE_URL && SUPABASE_ANON_KEY) {
+      try {
+        await fetch(`${SUPABASE_URL}/rest/v1/check_measures?id=eq.${id}`, {
+          method: "DELETE",
+          headers: {
+            apikey: SUPABASE_ANON_KEY,
+            Authorization: `Bearer ${SUPABASE_ANON_KEY}`,
+          },
+        });
+      } catch (err) {
+        console.error("Failed to delete from Supabase:", err);
+      }
+    }
+
     showToast("Job deleted");
   };
 
@@ -697,13 +816,6 @@ export default function App() {
 
       const payload = {
         id: job.id,
-        lead_name: job.lead_name || "",
-        phone: job.phone || "",
-        email: job.email || "",
-        street: job.street || "",
-        suburb: job.suburb || "",
-        postcode: job.postcode || "",
-        address: [job.street, job.suburb, job.postcode].filter(Boolean).join(", "),
         lead_id: job.lead_id || null,
         measure_date: job.measure_date || null,
         measure_time: job.measure_time || null,
@@ -855,7 +967,7 @@ export default function App() {
                         className="field-input"
                         placeholder="Auto-filled from lead"
                         value={currentJob.lead_name}
-                        onChange={(e) => updateJob(currentJob.id, { lead_name: e.target.value })}
+                        onChange={(e) => updateLeadField(currentJob.id, "lead_name", e.target.value)}
                       />
                     </div>
                     <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
@@ -866,7 +978,7 @@ export default function App() {
                           type="tel"
                           placeholder="Auto-filled"
                           value={currentJob.phone}
-                          onChange={(e) => updateJob(currentJob.id, { phone: e.target.value })}
+                          onChange={(e) => updateLeadField(currentJob.id, "phone", e.target.value)}
                         />
                       </div>
                       <div className="field">
@@ -876,7 +988,7 @@ export default function App() {
                           type="email"
                           placeholder="Auto-filled"
                           value={currentJob.email || ""}
-                          onChange={(e) => updateJob(currentJob.id, { email: e.target.value })}
+                          onChange={(e) => updateLeadField(currentJob.id, "email", e.target.value)}
                         />
                       </div>
                     </div>
@@ -886,7 +998,7 @@ export default function App() {
                         className="field-input"
                         placeholder="e.g. 42 Brunswick St"
                         value={currentJob.street || ""}
-                        onChange={(e) => updateJob(currentJob.id, { street: e.target.value })}
+                        onChange={(e) => updateLeadField(currentJob.id, "street", e.target.value)}
                       />
                     </div>
                     <div style={{ display: "grid", gridTemplateColumns: "2fr 1fr", gap: 12 }}>
@@ -896,7 +1008,7 @@ export default function App() {
                           className="field-input"
                           placeholder="e.g. Fitzroy"
                           value={currentJob.suburb || ""}
-                          onChange={(e) => updateJob(currentJob.id, { suburb: e.target.value })}
+                          onChange={(e) => updateLeadField(currentJob.id, "suburb", e.target.value)}
                         />
                       </div>
                       <div className="field">
@@ -905,7 +1017,7 @@ export default function App() {
                           className="field-input"
                           placeholder="3065"
                           value={currentJob.postcode || ""}
-                          onChange={(e) => updateJob(currentJob.id, { postcode: e.target.value })}
+                          onChange={(e) => updateLeadField(currentJob.id, "postcode", e.target.value)}
                         />
                       </div>
                     </div>
@@ -916,7 +1028,7 @@ export default function App() {
                           className="field-input"
                           type="date"
                           value={currentJob.measure_date}
-                          onChange={(e) => updateJob(currentJob.id, { measure_date: e.target.value })}
+                          onChange={(e) => updateLeadField(currentJob.id, "measure_date", e.target.value)}
                         />
                       </div>
                       <div className="field">
@@ -1072,18 +1184,24 @@ export default function App() {
 function WindowDetail({ job, window: win, windowIdx, totalWindows, onBack, onUpdate, onDelete, onNext, onPrev, showToast }) {
   const mainPhotoRef = useRef(null);
   const extraPhotoRef = useRef(null);
+  const [drawingPhoto, setDrawingPhoto] = useState(null); // { src, target: 'main' | index }
 
   const handleMainPhoto = async (e) => {
     const file = e.target.files?.[0];
     if (!file) return;
     const dataUrl = await readFileAsDataURL(file);
-    onUpdate({ main_photo: dataUrl });
+    // Open drawing editor immediately after capture
+    setDrawingPhoto({ src: dataUrl, target: "main" });
   };
 
   const handleExtraPhotos = async (e) => {
     const files = Array.from(e.target.files || []);
+    if (files.length === 0) return;
     const urls = await Promise.all(files.map(readFileAsDataURL));
+    // Open drawing editor for the first new photo
+    const newIndex = win.extra_photos.length;
     onUpdate({ extra_photos: [...win.extra_photos, ...urls] });
+    setDrawingPhoto({ src: urls[0], target: newIndex });
   };
 
   const removeExtraPhoto = (idx) => {
@@ -1130,9 +1248,27 @@ function WindowDetail({ job, window: win, windowIdx, totalWindows, onBack, onUpd
 
           {/* Main Photo */}
           <div className="section-title" style={{ padding: "8px 0" }}>Window Photo</div>
-          <div className="photo-main" onClick={() => mainPhotoRef.current?.click()}>
+          <div className="photo-main" onClick={() => !win.main_photo && mainPhotoRef.current?.click()}>
             {win.main_photo ? (
-              <img src={win.main_photo} alt="Window" />
+              <>
+                <img src={win.main_photo} alt="Window" />
+                <div style={{ position: "absolute", bottom: 8, right: 8, display: "flex", gap: 6, zIndex: 2 }}>
+                  <button
+                    className="btn btn-ghost"
+                    style={{ background: "rgba(0,0,0,0.6)", color: "#fff", borderRadius: 8, padding: "6px 10px", fontSize: 12 }}
+                    onClick={(e) => { e.stopPropagation(); setDrawingPhoto({ src: win.main_photo, target: "main" }); }}
+                  >
+                    <Icons.Pen size={14} /> Annotate
+                  </button>
+                  <button
+                    className="btn btn-ghost"
+                    style={{ background: "rgba(0,0,0,0.6)", color: "#fff", borderRadius: 8, padding: "6px 10px", fontSize: 12 }}
+                    onClick={(e) => { e.stopPropagation(); mainPhotoRef.current?.click(); }}
+                  >
+                    <Icons.Camera size={14} /> Replace
+                  </button>
+                </div>
+              </>
             ) : (
               <>
                 <Icons.Camera size={32} color="var(--warm-300)" />
@@ -1154,7 +1290,7 @@ function WindowDetail({ job, window: win, windowIdx, totalWindows, onBack, onUpd
             <div className="section-title" style={{ padding: "0 0 8px" }}>Additional Photos</div>
             <div className="photo-strip">
               {win.extra_photos.map((url, idx) => (
-                <div className="photo-thumb" key={idx}>
+                <div className="photo-thumb" key={idx} onClick={() => setDrawingPhoto({ src: url, target: idx })}>
                   <img src={url} alt="" />
                   <div className="photo-thumb-remove" onClick={(e) => { e.stopPropagation(); removeExtraPhoto(idx); }}>×</div>
                 </div>
@@ -1279,6 +1415,25 @@ function WindowDetail({ job, window: win, windowIdx, totalWindows, onBack, onUpd
           </button>
         </div>
       </div>
+
+      {/* Drawing Editor */}
+      {drawingPhoto && (
+        <DrawingEditor
+          imageSrc={drawingPhoto.src}
+          onClose={() => setDrawingPhoto(null)}
+          onSave={(annotatedDataUrl) => {
+            if (drawingPhoto.target === "main") {
+              onUpdate({ main_photo: annotatedDataUrl });
+            } else if (typeof drawingPhoto.target === "number") {
+              const updated = [...win.extra_photos];
+              updated[drawingPhoto.target] = annotatedDataUrl;
+              onUpdate({ extra_photos: updated });
+            }
+            setDrawingPhoto(null);
+            showToast("Annotation saved");
+          }}
+        />
+      )}
     </>
   );
 }
@@ -1518,6 +1673,159 @@ function AddLeadModal({ onClose, onSaved }) {
             {saving ? "Saving…" : "Save Lead"}
           </button>
         </div>
+      </div>
+    </div>
+  );
+}
+
+// ============================================================
+// DRAWING EDITOR
+// ============================================================
+const DRAW_COLORS = ["#EF4444", "#8DC73F", "#3B82F6", "#F59E0B", "#FFFFFF", "#000000"];
+const DRAW_SIZES = [3, 6, 12];
+
+function DrawingEditor({ imageSrc, onSave, onClose }) {
+  const canvasRef = useRef(null);
+  const [isDrawing, setIsDrawing] = useState(false);
+  const [color, setColor] = useState(DRAW_COLORS[0]);
+  const [lineWidth, setLineWidth] = useState(DRAW_SIZES[1]);
+  const [history, setHistory] = useState([]);
+  const imgRef = useRef(null);
+  const lastPoint = useRef(null);
+
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas || !imageSrc) return;
+    const img = new Image();
+    img.onload = () => {
+      imgRef.current = img;
+      const maxW = Math.min(img.width, 1200);
+      const scale = maxW / img.width;
+      canvas.width = Math.round(img.width * scale);
+      canvas.height = Math.round(img.height * scale);
+      const ctx = canvas.getContext("2d");
+      ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+      setHistory([canvas.toDataURL()]);
+    };
+    img.src = imageSrc;
+  }, [imageSrc]);
+
+  const getPos = (e) => {
+    const canvas = canvasRef.current;
+    const rect = canvas.getBoundingClientRect();
+    const scaleX = canvas.width / rect.width;
+    const scaleY = canvas.height / rect.height;
+    const touch = e.touches?.[0] || e.changedTouches?.[0] || e;
+    return {
+      x: (touch.clientX - rect.left) * scaleX,
+      y: (touch.clientY - rect.top) * scaleY,
+    };
+  };
+
+  const startDraw = (e) => {
+    e.preventDefault();
+    setIsDrawing(true);
+    const pos = getPos(e);
+    lastPoint.current = pos;
+    const ctx = canvasRef.current.getContext("2d");
+    ctx.beginPath();
+    ctx.arc(pos.x, pos.y, lineWidth / 2, 0, Math.PI * 2);
+    ctx.fillStyle = color;
+    ctx.fill();
+  };
+
+  const draw = (e) => {
+    e.preventDefault();
+    if (!isDrawing) return;
+    const ctx = canvasRef.current.getContext("2d");
+    const pos = getPos(e);
+    ctx.beginPath();
+    ctx.moveTo(lastPoint.current.x, lastPoint.current.y);
+    ctx.lineTo(pos.x, pos.y);
+    ctx.strokeStyle = color;
+    ctx.lineWidth = lineWidth;
+    ctx.lineCap = "round";
+    ctx.lineJoin = "round";
+    ctx.stroke();
+    lastPoint.current = pos;
+  };
+
+  const endDraw = (e) => {
+    e.preventDefault();
+    if (!isDrawing) return;
+    setIsDrawing(false);
+    lastPoint.current = null;
+    setHistory((prev) => [...prev, canvasRef.current.toDataURL()]);
+  };
+
+  const undo = () => {
+    if (history.length <= 1) return;
+    const newHistory = history.slice(0, -1);
+    setHistory(newHistory);
+    const img = new Image();
+    img.onload = () => {
+      const ctx = canvasRef.current.getContext("2d");
+      ctx.clearRect(0, 0, canvasRef.current.width, canvasRef.current.height);
+      ctx.drawImage(img, 0, 0);
+    };
+    img.src = newHistory[newHistory.length - 1];
+  };
+
+  const handleSave = () => {
+    const dataUrl = canvasRef.current.toDataURL("image/jpeg", 0.85);
+    onSave(dataUrl);
+  };
+
+  return (
+    <div className="draw-overlay">
+      <div className="draw-toolbar">
+        <button className="draw-btn draw-btn-cancel" onClick={onClose}>Cancel</button>
+        <div className="draw-toolbar-title" style={{ textAlign: "center" }}>Annotate Photo</div>
+        <button className="draw-btn draw-btn-save" onClick={handleSave}>
+          <Icons.Check size={16} /> Save
+        </button>
+      </div>
+      <div className="draw-canvas-wrap">
+        <canvas
+          ref={canvasRef}
+          onMouseDown={startDraw}
+          onMouseMove={draw}
+          onMouseUp={endDraw}
+          onMouseLeave={endDraw}
+          onTouchStart={startDraw}
+          onTouchMove={draw}
+          onTouchEnd={endDraw}
+          style={{ cursor: "crosshair" }}
+        />
+      </div>
+      <div className="draw-bottom-bar">
+        {DRAW_COLORS.map((c) => (
+          <button
+            key={c}
+            className={`draw-color-btn ${color === c ? "active" : ""}`}
+            style={{ background: c }}
+            onClick={() => setColor(c)}
+          />
+        ))}
+        <div style={{ width: 1, height: 24, background: "#444", margin: "0 4px" }} />
+        {DRAW_SIZES.map((s) => (
+          <button
+            key={s}
+            className={`draw-size-btn ${lineWidth === s ? "active" : ""}`}
+            onClick={() => setLineWidth(s)}
+          >
+            <div style={{ width: s + 2, height: s + 2, borderRadius: "50%", background: "#fff" }} />
+          </button>
+        ))}
+        <div style={{ width: 1, height: 24, background: "#444", margin: "0 4px" }} />
+        <button
+          className="draw-btn draw-btn-tool"
+          onClick={undo}
+          disabled={history.length <= 1}
+          style={{ opacity: history.length <= 1 ? 0.4 : 1 }}
+        >
+          <Icons.Undo size={16} /> Undo
+        </button>
       </div>
     </div>
   );

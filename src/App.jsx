@@ -108,6 +108,7 @@ const Icons = {
   Window: (p) => <Icon {...p} d={<><rect x="2" y="3" width="20" height="18" rx="1"/><line x1="12" y1="3" x2="12" y2="21"/><line x1="2" y1="12" x2="22" y2="12"/></>} />,
   Pen: (p) => <Icon {...p} d={<><path d="M12 19l7-7 3 3-7 7-3-3z"/><path d="M18 13l-1.5-7.5L2 2l3.5 14.5L13 18l5-5z"/><path d="M2 2l7.586 7.586"/><circle cx="11" cy="11" r="2"/></>} />,
   Undo: (p) => <Icon {...p} d={<><polyline points="1 4 1 10 7 10"/><path d="M3.51 15a9 9 0 102.13-9.36L1 10"/></>} />,
+  Download: (p) => <Icon {...p} d={<><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></>} />,
 };
 
 // ============================================================
@@ -513,6 +514,290 @@ const readFileAsDataURL = (file) => new Promise((resolve) => {
   r.readAsDataURL(file);
 });
 
+// Compress image to fit in localStorage and render reliably
+const compressImage = (dataUrl, maxWidth = 1200, quality = 0.7) => new Promise((resolve) => {
+  const img = new Image();
+  img.onload = () => {
+    const canvas = document.createElement("canvas");
+    let w = img.width;
+    let h = img.height;
+    if (w > maxWidth) {
+      h = Math.round((h * maxWidth) / w);
+      w = maxWidth;
+    }
+    canvas.width = w;
+    canvas.height = h;
+    const ctx = canvas.getContext("2d");
+    ctx.drawImage(img, 0, 0, w, h);
+    resolve(canvas.toDataURL("image/jpeg", quality));
+  };
+  img.onerror = () => resolve(dataUrl); // fallback to original if conversion fails
+  img.src = dataUrl;
+});
+
+// ============================================================
+// PDF EXPORT
+// ============================================================
+const LOGO_DATA_URL = "/favicon.png";
+
+const loadJsPDF = () => {
+  return new Promise((resolve, reject) => {
+    if (window.jspdf) return resolve(window.jspdf.jsPDF);
+    const s = document.createElement("script");
+    s.src = "https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js";
+    s.onload = () => resolve(window.jspdf.jsPDF);
+    s.onerror = reject;
+    document.head.appendChild(s);
+  });
+};
+
+const loadImage = (src) => new Promise((resolve) => {
+  const img = new Image();
+  img.crossOrigin = "anonymous";
+  img.onload = () => resolve(img);
+  img.onerror = () => resolve(null);
+  img.src = src;
+});
+
+const exportJobPDF = async (job, showToast) => {
+  try {
+    showToast("Generating PDF...");
+    const jsPDF = await loadJsPDF();
+    const doc = new jsPDF({ orientation: "portrait", unit: "mm", format: "a4" });
+    const pw = 210, ph = 297, mx = 15, mxr = 195;
+    const cw = mxr - mx; // content width
+    let y = 0;
+
+    const addHeader = async (pageNum, totalPages) => {
+      // Dark green bar
+      doc.setFillColor(28, 46, 15);
+      doc.rect(0, 0, pw, 22, "F");
+
+      // Logo
+      try {
+        const logoImg = await loadImage(LOGO_DATA_URL);
+        if (logoImg) doc.addImage(logoImg, "PNG", mx, 3, 16, 16);
+      } catch {}
+
+      // Company name
+      doc.setTextColor(255, 255, 255);
+      doc.setFontSize(14);
+      doc.setFont("helvetica", "bold");
+      doc.text("Curtain Ideas", mx + 20, 13);
+
+      // Page number
+      doc.setFontSize(9);
+      doc.setFont("helvetica", "normal");
+      doc.text(`Page ${pageNum} of ${totalPages}`, mxr, 13, { align: "right" });
+
+      doc.setTextColor(15, 23, 42);
+      return 28;
+    };
+
+    // Calculate total pages: 1 cover + ceil(windows/2)
+    const totalPages = 1 + Math.ceil(job.windows.length / 2);
+
+    // ---- PAGE 1: COVER ----
+    y = await addHeader(1, totalPages);
+
+    // Job title
+    doc.setFontSize(22);
+    doc.setFont("helvetica", "bold");
+    doc.text("Check Measure Report", mx, y + 8);
+    y += 16;
+
+    // Lead details box
+    doc.setFillColor(241, 245, 249);
+    doc.roundedRect(mx, y, cw, 52, 3, 3, "F");
+    y += 8;
+    doc.setFontSize(10);
+    doc.setFont("helvetica", "bold");
+    doc.setTextColor(148, 163, 184);
+    doc.text("LEAD DETAILS", mx + 6, y);
+    y += 7;
+
+    doc.setFontSize(11);
+    doc.setTextColor(15, 23, 42);
+    doc.setFont("helvetica", "bold");
+    doc.text(job.lead_name || "—", mx + 6, y);
+    y += 6;
+
+    doc.setFont("helvetica", "normal");
+    doc.setFontSize(10);
+    const address = [job.street, job.suburb, job.postcode].filter(Boolean).join(", ");
+    if (address) { doc.text(address, mx + 6, y); y += 5; }
+    if (job.phone) { doc.text(`Phone: ${job.phone}`, mx + 6, y); y += 5; }
+    if (job.email) { doc.text(`Email: ${job.email}`, mx + 6, y); y += 5; }
+
+    const dateStr = job.measure_date ? new Date(job.measure_date).toLocaleDateString("en-AU", { day: "numeric", month: "long", year: "numeric" }) : "";
+    if (dateStr || job.measure_time) {
+      doc.text(`Measure: ${dateStr}${job.measure_time ? " at " + job.measure_time : ""}`, mx + 6, y);
+    }
+
+    y += 16;
+
+    // Window summary table
+    doc.setFontSize(10);
+    doc.setFont("helvetica", "bold");
+    doc.setTextColor(148, 163, 184);
+    doc.text("WINDOW SUMMARY", mx, y);
+    y += 6;
+
+    doc.setFillColor(28, 46, 15);
+    doc.rect(mx, y, cw, 7, "F");
+    doc.setTextColor(255, 255, 255);
+    doc.setFontSize(8);
+    doc.setFont("helvetica", "bold");
+    doc.text("#", mx + 3, y + 5);
+    doc.text("Window", mx + 12, y + 5);
+    doc.text("Inside W", mx + 70, y + 5);
+    doc.text("Inside L", mx + 95, y + 5);
+    doc.text("Treatment W", mx + 120, y + 5);
+    doc.text("Treatment D", mx + 150, y + 5);
+    y += 7;
+
+    doc.setTextColor(15, 23, 42);
+    doc.setFont("helvetica", "normal");
+    job.windows.forEach((w, i) => {
+      const bg = i % 2 === 0 ? 248 : 241;
+      doc.setFillColor(bg, bg, bg);
+      doc.rect(mx, y, cw, 6, "F");
+      doc.text(`${i + 1}`, mx + 3, y + 4.5);
+      doc.text(w.label || "—", mx + 12, y + 4.5);
+      doc.text(w.measurements?.inside_width || "—", mx + 70, y + 4.5);
+      doc.text(w.measurements?.inside_length || "—", mx + 95, y + 4.5);
+      doc.text(w.measurements?.treatment_width || "—", mx + 120, y + 4.5);
+      doc.text(w.measurements?.treatment_drop || "—", mx + 150, y + 4.5);
+      y += 6;
+    });
+
+    // ---- WINDOW PAGES: 2 per page ----
+    for (let i = 0; i < job.windows.length; i += 2) {
+      doc.addPage();
+      const pageNum = 2 + Math.floor(i / 2);
+      y = await addHeader(pageNum, totalPages);
+
+      for (let slot = 0; slot < 2; slot++) {
+        const wIdx = i + slot;
+        if (wIdx >= job.windows.length) break;
+        const w = job.windows[wIdx];
+        const slotY = y + slot * 130; // Each window gets ~130mm
+
+        // Window title
+        doc.setFontSize(12);
+        doc.setFont("helvetica", "bold");
+        doc.setTextColor(28, 46, 15);
+        doc.text(`Window ${wIdx + 1}: ${w.label || ""}`, mx, slotY + 6);
+
+        // Photo
+        let photoEndX = mx;
+        const photoSrc = w.main_photo || w.main_photo_url;
+        if (photoSrc) {
+          try {
+            const img = await loadImage(photoSrc);
+            if (img) {
+              const maxW = 70, maxH = 52;
+              let iw = img.width, ih = img.height;
+              const scale = Math.min(maxW / iw, maxH / ih);
+              iw *= scale; ih *= scale;
+              doc.addImage(img, "JPEG", mx, slotY + 9, iw, ih);
+              photoEndX = mx + iw + 4;
+            }
+          } catch {}
+        }
+
+        // Measurements table beside photo
+        const measX = Math.max(photoEndX, mx + 74);
+        const measFields = [
+          ["Inside Width", w.measurements?.inside_width],
+          ["Outside Width", w.measurements?.outside_width],
+          ["Inside Length", w.measurements?.inside_length],
+          ["Outside Length", w.measurements?.outside_length],
+          ["Treatment Width", w.measurements?.treatment_width],
+          ["Treatment Drop", w.measurements?.treatment_drop],
+          ["L Wall → Arch.", w.measurements?.left_wall_to_arch],
+          ["R Wall → Arch.", w.measurements?.right_wall_to_arch],
+          ["Arch. → Ceiling", w.measurements?.arch_to_ceiling],
+          ["Arch. → Floor", w.measurements?.arch_to_floor],
+        ];
+
+        let my = slotY + 9;
+        // Table header
+        doc.setFillColor(28, 46, 15);
+        doc.rect(measX, my, mxr - measX, 6, "F");
+        doc.setTextColor(255, 255, 255);
+        doc.setFontSize(7);
+        doc.setFont("helvetica", "bold");
+        doc.text("Measurement", measX + 2, my + 4.5);
+        doc.text("mm", mxr - 2, my + 4.5, { align: "right" });
+        my += 6;
+
+        doc.setTextColor(15, 23, 42);
+        doc.setFont("helvetica", "normal");
+        measFields.forEach(([label, val], mi) => {
+          const bg = mi % 2 === 0 ? 248 : 241;
+          doc.setFillColor(bg, bg, bg);
+          doc.rect(measX, my, mxr - measX, 5, "F");
+          doc.setFontSize(7);
+          doc.text(label, measX + 2, my + 3.8);
+          doc.setFont("helvetica", "bold");
+          doc.text(val || "—", mxr - 2, my + 3.8, { align: "right" });
+          doc.setFont("helvetica", "normal");
+          my += 5;
+        });
+
+        // Comments
+        if (w.comments) {
+          const commY = slotY + 65;
+          doc.setFillColor(242, 249, 231);
+          doc.roundedRect(mx, commY, cw, 14, 2, 2, "F");
+          doc.setFontSize(7);
+          doc.setFont("helvetica", "bold");
+          doc.setTextColor(141, 199, 63);
+          doc.text("COMMENTS", mx + 3, commY + 4);
+          doc.setFont("helvetica", "normal");
+          doc.setTextColor(15, 23, 42);
+          doc.setFontSize(8);
+          const lines = doc.splitTextToSize(w.comments, cw - 6);
+          doc.text(lines.slice(0, 2), mx + 3, commY + 9);
+        }
+
+        // Extra photos strip
+        const extras = w.extra_photos?.filter(Boolean) || [];
+        if (extras.length > 0) {
+          let ex = mx;
+          const eY = slotY + (w.comments ? 82 : 65);
+          for (let ei = 0; ei < Math.min(extras.length, 5); ei++) {
+            try {
+              const eImg = await loadImage(extras[ei]);
+              if (eImg) {
+                doc.addImage(eImg, "JPEG", ex, eY, 30, 22);
+                ex += 33;
+              }
+            } catch {}
+          }
+        }
+
+        // Divider between windows
+        if (slot === 0 && i + 1 < job.windows.length) {
+          const divY = slotY + 126;
+          doc.setDrawColor(226, 232, 240);
+          doc.setLineWidth(0.3);
+          doc.line(mx, divY, mxr, divY);
+        }
+      }
+    }
+
+    // Save
+    const filename = `${(job.lead_name || "measure").replace(/\s+/g, "_")}_check_measure.pdf`;
+    doc.save(filename);
+    showToast("PDF downloaded ✓");
+  } catch (err) {
+    console.error("PDF export error:", err);
+    showToast("PDF export failed");
+  }
+};
+
 // ============================================================
 // MAIN APP
 // ============================================================
@@ -592,16 +877,23 @@ export default function App() {
           for (const row of remoteRows) {
             if (!localIds.has(row.id)) {
               const lead = row.leads || {};
-              const windows = (Array.isArray(row.measurements_json) ? row.measurements_json : []).map((w) => ({
-                id: w.id || crypto.randomUUID?.() || `${Date.now()}-${Math.random().toString(36).slice(2,9)}`,
-                label: w.label || "Window",
-                main_photo: w.main_photo_url || null,
-                main_photo_url: w.main_photo_url || null,
-                extra_photos: w.extra_photo_urls || [],
-                extra_photo_urls: w.extra_photo_urls || [],
-                measurements: w.measurements || {},
-                comments: w.comments || "",
-              }));
+              const windowData = Array.isArray(row.measurements_json) ? row.measurements_json
+                : Array.isArray(row.windows) ? row.windows : [];
+              
+              const windows = windowData.map((w) => {
+                const mainPhoto = w.main_photo_url || w.main_photo || null;
+                const extraPhotos = w.extra_photo_urls || w.extra_photos || [];
+                return {
+                  id: w.id || crypto.randomUUID?.() || `${Date.now()}-${Math.random().toString(36).slice(2,9)}`,
+                  label: w.label || "Window",
+                  main_photo: mainPhoto,
+                  main_photo_url: mainPhoto,
+                  extra_photos: extraPhotos,
+                  extra_photo_urls: extraPhotos,
+                  measurements: w.measurements || {},
+                  comments: w.comments || "",
+                };
+              });
 
               merged.push({
                 id: row.id,
@@ -619,9 +911,28 @@ export default function App() {
                 created_at: row.created_at,
               });
             } else {
-              // Mark local job as synced if it exists in Supabase
+              // Update local job with cloud data (photos, synced status)
               const idx = merged.findIndex((j) => j.id === row.id);
-              if (idx !== -1) merged[idx] = { ...merged[idx], synced: true };
+              if (idx !== -1) {
+                const localJob = merged[idx];
+                const windowData = Array.isArray(row.measurements_json) ? row.measurements_json
+                  : Array.isArray(row.windows) ? row.windows : [];
+                
+                // Update windows with cloud photo URLs where local photos are missing
+                const updatedWindows = localJob.windows.map((lw) => {
+                  const rw = windowData.find((r) => r.id === lw.id);
+                  if (!rw) return lw;
+                  return {
+                    ...lw,
+                    main_photo: lw.main_photo || rw.main_photo_url || rw.main_photo || lw.main_photo,
+                    main_photo_url: rw.main_photo_url || lw.main_photo_url || null,
+                    extra_photos: lw.extra_photos.length > 0 ? lw.extra_photos : (rw.extra_photo_urls || rw.extra_photos || []),
+                    extra_photo_urls: rw.extra_photo_urls || lw.extra_photo_urls || [],
+                  };
+                });
+                
+                merged[idx] = { ...localJob, windows: updatedWindows, synced: true };
+              }
             }
           }
           return merged;
@@ -671,7 +982,11 @@ export default function App() {
 
   // Persist to localStorage
   useEffect(() => {
-    try { localStorage.setItem("cmb_jobs", JSON.stringify(jobs)); } catch {}
+    try {
+      localStorage.setItem("cmb_jobs", JSON.stringify(jobs));
+    } catch (err) {
+      console.warn("localStorage save failed (likely quota exceeded):", err.message);
+    }
   }, [jobs]);
 
   const showToast = useCallback((msg) => {
@@ -1187,6 +1502,10 @@ export default function App() {
 
                 <div className="divider" />
 
+                <button className="btn btn-primary btn-block" style={{ marginBottom: 8 }} onClick={() => exportJobPDF(currentJob, showToast)}>
+                  <Icons.Download size={16} /> Export PDF
+                </button>
+
                 <button className="btn btn-danger btn-block" style={{ marginTop: 8 }} onClick={() => {
                   if (confirm("Delete this entire job?")) deleteJob(currentJob.id);
                 }}>
@@ -1287,7 +1606,8 @@ function WindowDetail({ job, window: win, windowIdx, totalWindows, onBack, onUpd
   const handleMainPhoto = async (e) => {
     const file = e.target.files?.[0];
     if (!file) return;
-    const dataUrl = await readFileAsDataURL(file);
+    const raw = await readFileAsDataURL(file);
+    const dataUrl = await compressImage(raw);
     // Open drawing editor immediately after capture
     setDrawingPhoto({ src: dataUrl, target: "main" });
   };
@@ -1295,7 +1615,8 @@ function WindowDetail({ job, window: win, windowIdx, totalWindows, onBack, onUpd
   const handleExtraPhotos = async (e) => {
     const files = Array.from(e.target.files || []);
     if (files.length === 0) return;
-    const urls = await Promise.all(files.map(readFileAsDataURL));
+    const rawUrls = await Promise.all(files.map(readFileAsDataURL));
+    const urls = await Promise.all(rawUrls.map((u) => compressImage(u)));
     // Open drawing editor for the first new photo
     const newIndex = win.extra_photos.length;
     onUpdate({ extra_photos: [...win.extra_photos, ...urls] });

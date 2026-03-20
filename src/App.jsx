@@ -1009,30 +1009,31 @@ export default function App() {
                 const updatedWindows = windowData.map((rw) => {
                   const lw = localJob.windows.find((l) => l.id === rw.id);
                   
-                  // For main photo: prefer local base64 (not yet uploaded), then cloud URL
-                  const mainPhoto = (lw?.main_photo && lw.main_photo.startsWith("data:")) 
-                    ? lw.main_photo 
-                    : rw.main_photo_url || rw.main_photo || lw?.main_photo || null;
-
-                  // For extra photos: merge cloud URLs + any local base64 not yet uploaded
+                  // Cloud URLs are the source of truth
+                  const cloudMain = rw.main_photo_url || rw.main_photo || null;
                   const cloudExtras = rw.extra_photo_urls || rw.extra_photos || [];
-                  const localExtras = lw?.extra_photos || [];
-                  // Start with cloud URLs as the base
+
+                  // Only keep local base64 if cloud doesn't have it yet (not yet uploaded)
+                  const localMainIsBase64 = lw?.main_photo && lw.main_photo.startsWith("data:");
+                  const mainPhoto = localMainIsBase64 ? lw.main_photo : cloudMain;
+
+                  // For extras: start with cloud, append any local base64 not yet uploaded
                   const mergedExtras = [...cloudExtras];
-                  // Add any local base64 photos that aren't in the cloud set yet
-                  localExtras.forEach((lp) => {
-                    if (lp && lp.startsWith("data:") && !mergedExtras.includes(lp)) {
-                      mergedExtras.push(lp);
-                    }
-                  });
+                  if (lw?.extra_photos) {
+                    lw.extra_photos.forEach((lp) => {
+                      if (lp && lp.startsWith("data:")) {
+                        mergedExtras.push(lp);
+                      }
+                    });
+                  }
 
                   return {
                     id: rw.id || genId(),
                     label: rw.label || lw?.label || "Window",
                     main_photo: mainPhoto,
-                    main_photo_url: rw.main_photo_url || lw?.main_photo_url || null,
+                    main_photo_url: cloudMain,
                     extra_photos: mergedExtras,
-                    extra_photo_urls: rw.extra_photo_urls || lw?.extra_photo_urls || [],
+                    extra_photo_urls: cloudExtras,
                     measurements: rw.measurements || lw?.measurements || {},
                     comments: rw.comments || lw?.comments || "",
                   };
@@ -1188,14 +1189,20 @@ export default function App() {
           });
 
           if (res.ok) {
-            // Update local jobs with cloud URLs so we don't re-upload
+            // Update local jobs: replace base64 with cloud URLs in BOTH arrays
             setJobs((prev) => prev.map((j) => {
               if (j.id !== job.id) return j;
-              const updatedWindows = j.windows.map((w, i) => ({
-                ...w,
-                main_photo_url: windowsSummary[i]?.main_photo_url || w.main_photo_url || null,
-                extra_photo_urls: windowsSummary[i]?.extra_photo_urls || w.extra_photo_urls || [],
-              }));
+              const updatedWindows = j.windows.map((w, i) => {
+                const summary = windowsSummary[i];
+                if (!summary) return w;
+                return {
+                  ...w,
+                  main_photo: summary.main_photo_url || w.main_photo,
+                  main_photo_url: summary.main_photo_url || w.main_photo_url || null,
+                  extra_photos: summary.extra_photo_urls.length > 0 ? summary.extra_photo_urls : w.extra_photos,
+                  extra_photo_urls: summary.extra_photo_urls,
+                };
+              });
               return { ...j, windows: updatedWindows, synced: true };
             }));
           }
@@ -1471,14 +1478,20 @@ export default function App() {
         throw new Error(`Sync failed (${res.status}): ${errBody}`);
       }
 
-      // Update local jobs with the cloud URLs so we don't re-upload next time
+      // Update local jobs: replace base64 with cloud URLs in both arrays
       setJobs((prev) => prev.map((j) => {
         if (j.id !== jobId) return j;
-        const updatedWindows = j.windows.map((w, i) => ({
-          ...w,
-          main_photo_url: windowsSummary[i]?.main_photo_url || null,
-          extra_photo_urls: windowsSummary[i]?.extra_photo_urls || [],
-        }));
+        const updatedWindows = j.windows.map((w, i) => {
+          const summary = windowsSummary[i];
+          if (!summary) return w;
+          return {
+            ...w,
+            main_photo: summary.main_photo_url || w.main_photo,
+            main_photo_url: summary.main_photo_url || w.main_photo_url || null,
+            extra_photos: summary.extra_photo_urls.length > 0 ? summary.extra_photo_urls : w.extra_photos,
+            extra_photo_urls: summary.extra_photo_urls,
+          };
+        });
         return { ...j, windows: updatedWindows, synced: true };
       }));
       setSupabaseConnected(true);
@@ -1921,7 +1934,8 @@ export default function App() {
 function WindowDetail({ job, window: win, windowIdx, totalWindows, onBack, onUpdate, onDelete, readOnly, onNext, onPrev, showToast }) {
   const mainPhotoRef = useRef(null);
   const extraPhotoRef = useRef(null);
-  const [drawingPhoto, setDrawingPhoto] = useState(null); // { src, target: 'main' | index }
+  const [drawingPhoto, setDrawingPhoto] = useState(null);
+  const [confirmDelete, setConfirmDelete] = useState(null); // null | "main" | index number // { src, target: 'main' | index }
 
   const handleMainPhoto = async (e) => {
     const file = e.target.files?.[0];
@@ -1941,7 +1955,9 @@ function WindowDetail({ job, window: win, windowIdx, totalWindows, onBack, onUpd
   };
 
   const removeExtraPhoto = (idx) => {
-    onUpdate({ extra_photos: win.extra_photos.filter((_, i) => i !== idx) });
+    const updatedPhotos = (win.extra_photos || []).filter((_, i) => i !== idx);
+    const updatedUrls = (win.extra_photo_urls || []).filter((_, i) => i !== idx);
+    onUpdate({ extra_photos: updatedPhotos, extra_photo_urls: updatedUrls });
   };
 
   const updateMeas = (key, val) => {
@@ -1954,10 +1970,15 @@ function WindowDetail({ job, window: win, windowIdx, totalWindows, onBack, onUpd
         <button className="header-back" onClick={onBack}>
           <Icons.ChevronLeft size={18} /> Back
         </button>
-        <div style={{ flex: 1, textAlign: "center" }}>
-          <span style={{ fontSize: 13, fontWeight: 600, color: "var(--warm-300)" }}>
+        <div style={{ flex: 1, textAlign: "center", display: "flex", alignItems: "center", justifyContent: "center", gap: 8 }}>
+          <span style={{ fontSize: 13, fontWeight: 600, color: "rgba(255,255,255,0.6)" }}>
             {windowIdx + 1} of {totalWindows}
           </span>
+          {job.synced ? (
+            <span className="pill pill-synced" style={{ fontSize: 10, padding: "2px 8px" }}><Icons.Check size={10} /> Synced</span>
+          ) : (
+            <span className="pill pill-local" style={{ fontSize: 10, padding: "2px 8px" }}>Saving...</span>
+          )}
         </div>
         <div className="header-actions">
           <button className="btn btn-ghost" disabled={windowIdx === 0} onClick={onPrev}>
@@ -2010,7 +2031,7 @@ function WindowDetail({ job, window: win, windowIdx, totalWindows, onBack, onUpd
                     style={{ background: "rgba(220,38,38,0.8)", color: "#fff", borderRadius: 8, padding: "6px 10px", fontSize: 12 }}
                     onClick={(e) => {
                       e.stopPropagation();
-                      if (confirm("Remove this photo?")) onUpdate({ main_photo: null, main_photo_url: null });
+                      setConfirmDelete("main");
                     }}
                   >
                     <Icons.Trash size={14} /> Remove
@@ -2043,7 +2064,7 @@ function WindowDetail({ job, window: win, windowIdx, totalWindows, onBack, onUpd
                 <div className="photo-thumb" key={idx} onClick={() => !readOnly && setDrawingPhoto({ src: url, target: idx })}>
                   <img src={url} alt="" />
                   {!readOnly && (
-                    <div className="photo-thumb-remove" onClick={(e) => { e.stopPropagation(); if (confirm("Remove this photo?")) removeExtraPhoto(idx); }}>×</div>
+                    <div className="photo-thumb-remove" onClick={(e) => { e.stopPropagation(); setConfirmDelete(idx); }}>×</div>
                   )}
                 </div>
               ))}
@@ -2178,6 +2199,33 @@ function WindowDetail({ job, window: win, windowIdx, totalWindows, onBack, onUpd
           )}
         </div>
       </div>
+
+      {/* Delete Photo Confirmation */}
+      {confirmDelete !== null && (
+        <div style={{
+          position: "fixed", inset: 0, background: "rgba(0,0,0,0.5)", zIndex: 250,
+          display: "flex", alignItems: "center", justifyContent: "center", padding: 24,
+        }} onClick={() => setConfirmDelete(null)}>
+          <div style={{
+            background: "#fff", borderRadius: 16, padding: 24, maxWidth: 320, width: "100%", textAlign: "center",
+          }} onClick={(e) => e.stopPropagation()}>
+            <div style={{ fontSize: 16, fontWeight: 600, marginBottom: 8 }}>Remove Photo?</div>
+            <div style={{ fontSize: 13, color: "var(--warm-300)", marginBottom: 20 }}>This action cannot be undone.</div>
+            <div style={{ display: "flex", gap: 10 }}>
+              <button className="btn btn-secondary" style={{ flex: 1 }} onClick={() => setConfirmDelete(null)}>Cancel</button>
+              <button className="btn btn-danger" style={{ flex: 1 }} onClick={() => {
+                if (confirmDelete === "main") {
+                  onUpdate({ main_photo: null, main_photo_url: null });
+                } else if (typeof confirmDelete === "number") {
+                  removeExtraPhoto(confirmDelete);
+                }
+                setConfirmDelete(null);
+                showToast("Photo removed");
+              }}>Remove</button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Drawing Editor */}
       {drawingPhoto && (

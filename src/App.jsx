@@ -1005,15 +1005,33 @@ export default function App() {
                 const windowData = Array.isArray(row.measurements_json) ? row.measurements_json
                   : Array.isArray(row.windows) ? row.windows : [];
                 
-                // Rebuild windows from cloud, preserving local base64 photos where available
+                // Rebuild windows from cloud, merging local and cloud photos
                 const updatedWindows = windowData.map((rw) => {
                   const lw = localJob.windows.find((l) => l.id === rw.id);
+                  
+                  // For main photo: prefer local base64 (not yet uploaded), then cloud URL
+                  const mainPhoto = (lw?.main_photo && lw.main_photo.startsWith("data:")) 
+                    ? lw.main_photo 
+                    : rw.main_photo_url || rw.main_photo || lw?.main_photo || null;
+
+                  // For extra photos: merge cloud URLs + any local base64 not yet uploaded
+                  const cloudExtras = rw.extra_photo_urls || rw.extra_photos || [];
+                  const localExtras = lw?.extra_photos || [];
+                  // Start with cloud URLs as the base
+                  const mergedExtras = [...cloudExtras];
+                  // Add any local base64 photos that aren't in the cloud set yet
+                  localExtras.forEach((lp) => {
+                    if (lp && lp.startsWith("data:") && !mergedExtras.includes(lp)) {
+                      mergedExtras.push(lp);
+                    }
+                  });
+
                   return {
                     id: rw.id || genId(),
                     label: rw.label || lw?.label || "Window",
-                    main_photo: lw?.main_photo || rw.main_photo_url || rw.main_photo || null,
+                    main_photo: mainPhoto,
                     main_photo_url: rw.main_photo_url || lw?.main_photo_url || null,
-                    extra_photos: (lw?.extra_photos?.length > 0 ? lw.extra_photos : null) || rw.extra_photo_urls || rw.extra_photos || [],
+                    extra_photos: mergedExtras,
                     extra_photo_urls: rw.extra_photo_urls || lw?.extra_photo_urls || [],
                     measurements: rw.measurements || lw?.measurements || {},
                     comments: rw.comments || lw?.comments || "",

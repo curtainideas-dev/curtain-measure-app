@@ -517,29 +517,52 @@ export default function App() {
       return;
     }
     try {
+      // Strip base64 photos from the sync payload (too large for DB)
+      const windowsSummary = job.windows.map((w) => ({
+        id: w.id,
+        label: w.label,
+        measurements: w.measurements,
+        comments: w.comments,
+        has_main_photo: !!w.main_photo,
+        extra_photo_count: w.extra_photos.length,
+      }));
+
       const payload = {
         id: job.id,
-        lead_name: job.lead_name,
-        address: job.address,
-        phone: job.phone,
+        lead_name: job.lead_name || "",
+        address: job.address || "",
+        phone: job.phone || "",
         measure_date: job.measure_date || null,
         measure_time: job.measure_time || null,
-        windows: JSON.stringify(job.windows.map((w) => ({
-          ...w,
-          main_photo: w.main_photo ? "(stored locally)" : null,
-          extra_photos: w.extra_photos.length + " photos",
-        }))),
-        measurements_json: JSON.stringify(job.windows),
+        windows: windowsSummary,
+        measurements_json: windowsSummary,
         created_at: job.created_at,
       };
-      const { error } = await supabase.from("check_measures").insert([payload]);
-      if (error) throw error;
+
+      // Use upsert so re-syncing the same job doesn't fail
+      const res = await fetch(`${SUPABASE_URL}/rest/v1/check_measures`, {
+        method: "POST",
+        headers: {
+          apikey: SUPABASE_ANON_KEY,
+          Authorization: `Bearer ${SUPABASE_ANON_KEY}`,
+          "Content-Type": "application/json",
+          Prefer: "return=representation,resolution=merge-duplicates",
+        },
+        body: JSON.stringify(payload),
+      });
+
+      if (!res.ok) {
+        const errBody = await res.text();
+        console.error("Supabase error:", res.status, errBody);
+        throw new Error(`Sync failed (${res.status}): ${errBody}`);
+      }
+
       setJobs((prev) => prev.map((j) => (j.id === jobId ? { ...j, synced: true } : j)));
       setSupabaseConnected(true);
       showToast("Synced to cloud ✓");
     } catch (err) {
-      showToast("Sync failed — check connection");
-      console.error(err);
+      console.error("Sync error:", err);
+      showToast("Sync failed — check console for details");
     }
   };
 
@@ -1009,26 +1032,25 @@ function SetupModal({ onClose }) {
             fontSize: 11, overflow: "auto", margin: "8px 0", lineHeight: 1.5,
           }}>{`CREATE TABLE check_measures (
   id UUID PRIMARY KEY,
-  lead_name TEXT,
-  address TEXT,
-  phone TEXT,
+  lead_name TEXT DEFAULT '',
+  address TEXT DEFAULT '',
+  phone TEXT DEFAULT '',
   measure_date DATE,
   measure_time TEXT,
-  windows JSONB,
-  measurements_json JSONB,
+  windows JSONB DEFAULT '[]',
+  measurements_json JSONB DEFAULT '[]',
   created_at TIMESTAMPTZ DEFAULT NOW()
 );
 
 -- Enable Row Level Security
-ALTER TABLE check_measures ENABLE ROW LEVEL SECURITY;
+ALTER TABLE check_measures
+  ENABLE ROW LEVEL SECURITY;
 
--- Allow anonymous access (or configure auth)
-CREATE POLICY "Allow all" ON check_measures
-  FOR ALL USING (true);
-
--- Create storage bucket for photos
-INSERT INTO storage.buckets (id, name, public)
-VALUES ('photos', 'photos', true);`}</pre>
+-- Allow anonymous insert + select + update
+CREATE POLICY "Allow all"
+  ON check_measures FOR ALL
+  USING (true)
+  WITH CHECK (true);`}</pre>
           <strong>3.</strong> Go to Project Settings → API and copy your <strong>Project URL</strong> and <strong>anon key</strong><br />
           <strong>4.</strong> Add them to your <code>.env</code> file:<br />
           <pre style={{

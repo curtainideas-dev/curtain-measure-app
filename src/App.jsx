@@ -2186,11 +2186,16 @@ function WindowDetail({ job, window: win, windowIdx, totalWindows, onBack, onUpd
           onClose={() => setDrawingPhoto(null)}
           onSave={(annotatedDataUrl) => {
             if (drawingPhoto.target === "main") {
-              onUpdate({ main_photo: annotatedDataUrl });
+              onUpdate({ main_photo: annotatedDataUrl, main_photo_url: null });
             } else if (typeof drawingPhoto.target === "number") {
-              const updated = [...win.extra_photos];
-              updated[drawingPhoto.target] = annotatedDataUrl;
-              onUpdate({ extra_photos: updated });
+              // Use the current extra_photos, ensure array exists and index is valid
+              const current = Array.isArray(win.extra_photos) ? [...win.extra_photos] : [];
+              if (drawingPhoto.target < current.length) {
+                current[drawingPhoto.target] = annotatedDataUrl;
+              } else {
+                current.push(annotatedDataUrl);
+              }
+              onUpdate({ extra_photos: current, extra_photo_urls: [] });
             }
             setDrawingPhoto(null);
             showToast("Annotation saved");
@@ -2453,6 +2458,7 @@ function DrawingEditor({ imageSrc, onSave, onClose }) {
   const [color, setColor] = useState(DRAW_COLORS[0]);
   const [lineWidth, setLineWidth] = useState(DRAW_SIZES[1]);
   const [history, setHistory] = useState([]);
+  const [loadError, setLoadError] = useState(false);
   const imgRef = useRef(null);
   const lastPoint = useRef(null);
 
@@ -2460,21 +2466,33 @@ function DrawingEditor({ imageSrc, onSave, onClose }) {
     const canvas = canvasRef.current;
     if (!canvas || !imageSrc) return;
     const img = new Image();
+    img.crossOrigin = "anonymous";
     img.onload = () => {
-      imgRef.current = img;
-      const maxW = Math.min(img.width, 1200);
-      const scale = maxW / img.width;
-      canvas.width = Math.round(img.width * scale);
-      canvas.height = Math.round(img.height * scale);
-      const ctx = canvas.getContext("2d");
-      ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
-      setHistory([canvas.toDataURL()]);
+      try {
+        imgRef.current = img;
+        const maxW = Math.min(img.width, 1200);
+        const scale = maxW / img.width;
+        canvas.width = Math.round(img.width * scale);
+        canvas.height = Math.round(img.height * scale);
+        const ctx = canvas.getContext("2d");
+        ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+        setHistory([canvas.toDataURL()]);
+        setLoadError(false);
+      } catch (err) {
+        console.error("Canvas setup failed:", err);
+        setLoadError(true);
+      }
+    };
+    img.onerror = () => {
+      console.error("Failed to load image for drawing:", imageSrc?.substring(0, 50));
+      setLoadError(true);
     };
     img.src = imageSrc;
   }, [imageSrc]);
 
   const getPos = (e) => {
     const canvas = canvasRef.current;
+    if (!canvas) return { x: 0, y: 0 };
     const rect = canvas.getBoundingClientRect();
     const scaleX = canvas.width / rect.width;
     const scaleY = canvas.height / rect.height;
@@ -2487,6 +2505,7 @@ function DrawingEditor({ imageSrc, onSave, onClose }) {
 
   const startDraw = (e) => {
     e.preventDefault();
+    if (!canvasRef.current || loadError) return;
     setIsDrawing(true);
     const pos = getPos(e);
     lastPoint.current = pos;
@@ -2499,7 +2518,7 @@ function DrawingEditor({ imageSrc, onSave, onClose }) {
 
   const draw = (e) => {
     e.preventDefault();
-    if (!isDrawing) return;
+    if (!isDrawing || !canvasRef.current) return;
     const ctx = canvasRef.current.getContext("2d");
     const pos = getPos(e);
     ctx.beginPath();
@@ -2515,18 +2534,21 @@ function DrawingEditor({ imageSrc, onSave, onClose }) {
 
   const endDraw = (e) => {
     e.preventDefault();
-    if (!isDrawing) return;
+    if (!isDrawing || !canvasRef.current) return;
     setIsDrawing(false);
     lastPoint.current = null;
-    setHistory((prev) => [...prev, canvasRef.current.toDataURL()]);
+    try {
+      setHistory((prev) => [...prev, canvasRef.current.toDataURL()]);
+    } catch {}
   };
 
   const undo = () => {
-    if (history.length <= 1) return;
+    if (history.length <= 1 || !canvasRef.current) return;
     const newHistory = history.slice(0, -1);
     setHistory(newHistory);
     const img = new Image();
     img.onload = () => {
+      if (!canvasRef.current) return;
       const ctx = canvasRef.current.getContext("2d");
       ctx.clearRect(0, 0, canvasRef.current.width, canvasRef.current.height);
       ctx.drawImage(img, 0, 0);
@@ -2535,8 +2557,14 @@ function DrawingEditor({ imageSrc, onSave, onClose }) {
   };
 
   const handleSave = () => {
-    const dataUrl = canvasRef.current.toDataURL("image/jpeg", 0.85);
-    onSave(dataUrl);
+    if (!canvasRef.current) return;
+    try {
+      const dataUrl = canvasRef.current.toDataURL("image/jpeg", 0.85);
+      onSave(dataUrl);
+    } catch (err) {
+      console.error("Failed to save annotation:", err);
+      onClose();
+    }
   };
 
   return (
@@ -2549,17 +2577,25 @@ function DrawingEditor({ imageSrc, onSave, onClose }) {
         </button>
       </div>
       <div className="draw-canvas-wrap">
-        <canvas
-          ref={canvasRef}
-          onMouseDown={startDraw}
-          onMouseMove={draw}
-          onMouseUp={endDraw}
-          onMouseLeave={endDraw}
-          onTouchStart={startDraw}
-          onTouchMove={draw}
-          onTouchEnd={endDraw}
-          style={{ cursor: "crosshair" }}
-        />
+        {loadError ? (
+          <div style={{ color: "#fff", textAlign: "center", padding: 32 }}>
+            <p style={{ fontSize: 16, marginBottom: 12 }}>Unable to load image for annotation</p>
+            <p style={{ fontSize: 13, color: "#999" }}>The image may need to be re-uploaded</p>
+            <button className="draw-btn draw-btn-cancel" style={{ marginTop: 16 }} onClick={onClose}>Go Back</button>
+          </div>
+        ) : (
+          <canvas
+            ref={canvasRef}
+            onMouseDown={startDraw}
+            onMouseMove={draw}
+            onMouseUp={endDraw}
+            onMouseLeave={endDraw}
+            onTouchStart={startDraw}
+            onTouchMove={draw}
+            onTouchEnd={endDraw}
+            style={{ cursor: "crosshair" }}
+          />
+        )}
       </div>
       <div className="draw-bottom-bar">
         {DRAW_COLORS.map((c) => (

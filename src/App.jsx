@@ -325,9 +325,56 @@ textarea.field-input { resize: vertical; min-height: 80px; line-height: 1.5; }
   display: flex; align-items: center; gap: 8px;
   animation: toast-in 0.3s ease;
 }
+.toast-success {
+  background: var(--success); color: #fff;
+}
+.toast-error {
+  background: var(--danger); color: #fff;
+}
 @keyframes toast-in {
   from { opacity: 0; transform: translateX(-50%) translateY(20px); }
   to { opacity: 1; transform: translateX(-50%) translateY(0); }
+}
+
+/* Sync Success Overlay */
+.sync-overlay {
+  position: fixed; inset: 0; z-index: 150;
+  display: flex; align-items: center; justify-content: center;
+  background: rgba(0,0,0,0.4); backdrop-filter: blur(4px);
+  animation: overlay-in 0.2s ease;
+}
+@keyframes overlay-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+.sync-overlay-card {
+  background: #fff; border-radius: 20px; padding: 40px 32px;
+  text-align: center; max-width: 300px; width: 90%;
+  box-shadow: var(--shadow-lg);
+  animation: overlay-card-in 0.3s ease;
+}
+@keyframes overlay-card-in {
+  from { opacity: 0; transform: scale(0.9) translateY(10px); }
+  to { opacity: 1; transform: scale(1) translateY(0); }
+}
+.sync-check-circle {
+  width: 64px; height: 64px; border-radius: 50%;
+  background: var(--success-bg); color: var(--success);
+  display: flex; align-items: center; justify-content: center;
+  margin: 0 auto 16px;
+  animation: check-pop 0.4s ease 0.15s both;
+}
+@keyframes check-pop {
+  0% { transform: scale(0); }
+  60% { transform: scale(1.15); }
+  100% { transform: scale(1); }
+}
+.sync-overlay-title {
+  font-family: var(--font-display); font-size: 22px;
+  margin-bottom: 6px; color: var(--ink);
+}
+.sync-overlay-desc {
+  font-size: 13px; color: var(--warm-300); line-height: 1.5;
 }
 
 /* Empty State */
@@ -419,13 +466,81 @@ export default function App() {
   const [isOnline, setIsOnline] = useState(true);
   const [supabaseConnected, setSupabaseConnected] = useState(false);
   const [showSetup, setShowSetup] = useState(false);
+  const [syncSuccess, setSyncSuccess] = useState(null); // holds job name on success
 
-  // Load from localStorage on mount
+  // Load from localStorage on mount, then fetch from Supabase
   useEffect(() => {
+    // Load local first
+    let localJobs = [];
     try {
       const saved = localStorage.getItem("cmb_jobs");
-      if (saved) setJobs(JSON.parse(saved));
+      if (saved) {
+        localJobs = JSON.parse(saved);
+        setJobs(localJobs);
+      }
     } catch {}
+
+    // Then fetch from Supabase and merge
+    const fetchFromSupabase = async () => {
+      if (!SUPABASE_URL || !SUPABASE_ANON_KEY) return;
+      try {
+        const res = await fetch(
+          `${SUPABASE_URL}/rest/v1/check_measures?select=*&order=created_at.desc`,
+          {
+            headers: {
+              apikey: SUPABASE_ANON_KEY,
+              Authorization: `Bearer ${SUPABASE_ANON_KEY}`,
+            },
+          }
+        );
+        if (!res.ok) return;
+        const remoteRows = await res.json();
+        if (!Array.isArray(remoteRows) || remoteRows.length === 0) return;
+
+        setJobs((prev) => {
+          const localIds = new Set(prev.map((j) => j.id));
+          const merged = [...prev];
+
+          for (const row of remoteRows) {
+            if (!localIds.has(row.id)) {
+              // Rebuild job from Supabase data
+              const windows = (Array.isArray(row.measurements_json) ? row.measurements_json : []).map((w) => ({
+                id: w.id || crypto.randomUUID?.() || `${Date.now()}-${Math.random().toString(36).slice(2,9)}`,
+                label: w.label || "Window",
+                main_photo: null,
+                extra_photos: [],
+                measurements: w.measurements || {},
+                comments: w.comments || "",
+              }));
+
+              merged.push({
+                id: row.id,
+                lead_name: row.lead_name || "",
+                address: row.address || "",
+                phone: row.phone || "",
+                measure_date: row.measure_date || "",
+                measure_time: row.measure_time || "",
+                windows,
+                synced: true,
+                created_at: row.created_at,
+              });
+            } else {
+              // Mark local job as synced if it exists in Supabase
+              const idx = merged.findIndex((j) => j.id === row.id);
+              if (idx !== -1) merged[idx] = { ...merged[idx], synced: true };
+            }
+          }
+          return merged;
+        });
+
+        setSupabaseConnected(true);
+      } catch (err) {
+        console.error("Supabase fetch error:", err);
+      }
+    };
+
+    fetchFromSupabase();
+
     setIsOnline(navigator.onLine);
     const on = () => setIsOnline(true);
     const off = () => setIsOnline(false);
@@ -559,7 +674,8 @@ export default function App() {
 
       setJobs((prev) => prev.map((j) => (j.id === jobId ? { ...j, synced: true } : j)));
       setSupabaseConnected(true);
-      showToast("Synced to cloud ✓");
+      setSyncSuccess(job.lead_name || "Job");
+      setTimeout(() => setSyncSuccess(null), 2500);
     } catch (err) {
       console.error("Sync error:", err);
       showToast("Sync failed — check console for details");
@@ -604,6 +720,13 @@ export default function App() {
                       <div className="job-info">
                         <div className="job-name">{job.lead_name || "Untitled Lead"}</div>
                         <div className="job-address">{job.address || "No address"}</div>
+                        <div style={{ marginTop: 4 }}>
+                          {job.synced ? (
+                            <span className="pill pill-synced"><Icons.Check size={10} /> Synced</span>
+                          ) : (
+                            <span className="pill pill-local">Local only</span>
+                          )}
+                        </div>
                       </div>
                       <div className="job-meta">
                         <div className="job-count">{job.windows.length} window{job.windows.length !== 1 ? "s" : ""}</div>
@@ -774,7 +897,29 @@ export default function App() {
         )}
 
         {/* Toast */}
-        {toast && <div className="toast"><Icons.Check size={16} /> {toast}</div>}
+        {toast && (
+          <div className={`toast ${toast.includes("failed") ? "toast-error" : ""}`}>
+            {toast.includes("failed") ? <Icons.X size={16} /> : <Icons.Check size={16} />} {toast}
+          </div>
+        )}
+
+        {/* Sync Success Overlay */}
+        {syncSuccess && (
+          <div className="sync-overlay" onClick={() => setSyncSuccess(null)}>
+            <div className="sync-overlay-card" onClick={(e) => e.stopPropagation()}>
+              <div className="sync-check-circle">
+                <Icons.Check size={32} />
+              </div>
+              <div className="sync-overlay-title">Synced to Cloud</div>
+              <div className="sync-overlay-desc">
+                {syncSuccess}'s measurements have been saved to Supabase successfully.
+              </div>
+              <button className="btn btn-primary btn-block" style={{ marginTop: 20 }} onClick={() => setSyncSuccess(null)}>
+                Done
+              </button>
+            </div>
+          </div>
+        )}
 
         {/* Setup Modal */}
         {showSetup && (

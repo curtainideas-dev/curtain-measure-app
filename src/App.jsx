@@ -112,30 +112,32 @@ const Icons = {
 // STYLES
 // ============================================================
 const CSS = `
-@import url('https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500;0,9..40,600;0,9..40,700&family=Instrument+Serif:ital@0;1&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,400;0,9..40,500;0,9..40,600;0,9..40,700&display=swap');
 
 :root {
-  --ink: #1a1612;
-  --paper: #f6f1eb;
-  --warm-100: #ede6dc;
-  --warm-200: #ddd3c5;
-  --warm-300: #c4b5a2;
-  --accent: #b45309;
-  --accent-light: #f59e0b;
-  --accent-bg: #fef3c7;
-  --danger: #dc2626;
-  --danger-bg: #fef2f2;
-  --success: #16a34a;
-  --success-bg: #f0fdf4;
+  --ink: #0F172A;
+  --paper: #F8FAFC;
+  --warm-100: #F1F5F9;
+  --warm-200: #E2E8F0;
+  --warm-300: #94A3B8;
+  --accent: #8DC73F;
+  --accent-dark: #1C2E0F;
+  --accent-hover: #7ab535;
+  --accent-bg: #F2F9E7;
+  --danger: #EF4444;
+  --danger-bg: #FEF2F2;
+  --success: #10B981;
+  --success-bg: #F0FDF4;
   --blue: #2563eb;
   --blue-bg: #eff6ff;
+  --warning-bg: #FFF7ED;
+  --warning: #C2410C;
   --radius: 12px;
   --radius-sm: 8px;
-  --shadow-sm: 0 1px 3px rgba(26,22,18,0.06);
-  --shadow: 0 4px 12px rgba(26,22,18,0.08);
-  --shadow-lg: 0 12px 32px rgba(26,22,18,0.12);
-  --font-body: 'DM Sans', sans-serif;
-  --font-display: 'Instrument Serif', serif;
+  --shadow-sm: 0 1px 3px rgba(15,23,42,0.06);
+  --shadow: 0 4px 12px rgba(15,23,42,0.08);
+  --shadow-lg: 0 12px 32px rgba(15,23,42,0.12);
+  --font-body: 'DM Sans', 'Segoe UI', sans-serif;
 }
 
 * { margin: 0; padding: 0; box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
@@ -147,21 +149,21 @@ input, textarea, select, button { font-family: inherit; font-size: inherit; }
 /* Header */
 .header { 
   position: sticky; top: 0; z-index: 50;
-  background: rgba(246,241,235,0.85); backdrop-filter: blur(20px); -webkit-backdrop-filter: blur(20px);
-  border-bottom: 1px solid var(--warm-200);
-  padding: 12px 16px;
+  background: var(--accent-dark);
+  padding: 14px 16px; min-height: 56px;
   display: flex; align-items: center; gap: 12px;
 }
 .header-back { 
-  background: none; border: none; color: var(--accent); cursor: pointer;
+  background: none; border: none; color: rgba(255,255,255,0.8); cursor: pointer;
   display: flex; align-items: center; gap: 2px; font-weight: 500; font-size: 14px;
   padding: 6px 4px;
 }
+.header-back:hover { color: #fff; }
 .header-title {
-  font-family: var(--font-display); font-size: 22px; font-weight: 400;
-  flex: 1; letter-spacing: -0.01em;
+  font-size: 18px; font-weight: 700;
+  flex: 1; letter-spacing: -0.01em; color: #fff;
 }
-.header-actions { display: flex; gap: 8px; }
+.header-actions { display: flex; gap: 8px; align-items: center; }
 
 /* Cards */
 .card {
@@ -183,7 +185,7 @@ input, textarea, select, button { font-family: inherit; font-size: inherit; }
   border-radius: var(--radius-sm); background: #fff; font-size: 15px;
   transition: border-color 0.2s, box-shadow 0.2s; color: var(--ink);
 }
-.field-input:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px rgba(180,83,9,0.1); }
+.field-input:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px rgba(141,199,63,0.15); }
 .field-input::placeholder { color: var(--warm-300); }
 textarea.field-input { resize: vertical; min-height: 80px; line-height: 1.5; }
 
@@ -203,7 +205,7 @@ textarea.field-input { resize: vertical; min-height: 80px; line-height: 1.5; }
   text-align: right; background: #fff; color: var(--ink);
   transition: border-color 0.2s;
 }
-.meas-input:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 2px rgba(180,83,9,0.1); }
+.meas-input:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 2px rgba(141,199,63,0.15); }
 .meas-input::placeholder { color: var(--warm-200); font-weight: 400; }
 .meas-unit {
   position: absolute; right: 10px; bottom: 9px; font-size: 11px;
@@ -218,12 +220,14 @@ textarea.field-input { resize: vertical; min-height: 80px; line-height: 1.5; }
   text-decoration: none; white-space: nowrap;
 }
 .btn-primary { background: var(--accent); color: #fff; }
-.btn-primary:hover { background: #a3480a; }
+.btn-primary:hover { background: #7ab535; }
 .btn-primary:active { transform: scale(0.97); }
 .btn-secondary { background: var(--warm-100); color: var(--ink); }
 .btn-secondary:hover { background: var(--warm-200); }
 .btn-ghost { background: none; color: var(--accent); padding: 8px; }
-.btn-ghost:hover { background: var(--accent-bg); }
+.btn-ghost:hover { background: rgba(141,199,63,0.1); }
+.header .btn-ghost { color: rgba(255,255,255,0.7); }
+.header .btn-ghost:hover { color: #fff; background: rgba(255,255,255,0.1); }
 .btn-danger { background: var(--danger-bg); color: var(--danger); }
 .btn-danger:hover { background: #fee2e2; }
 .btn-block { width: 100%; }
@@ -314,7 +318,7 @@ textarea.field-input { resize: vertical; min-height: 80px; line-height: 1.5; }
   align-items: center; justify-content: center; z-index: 40;
   transition: transform 0.15s, box-shadow 0.15s;
 }
-.fab:hover { transform: scale(1.05); box-shadow: 0 16px 40px rgba(180,83,9,0.25); }
+.fab:hover { transform: scale(1.05); box-shadow: 0 16px 40px rgba(141,199,63,0.3); }
 .fab:active { transform: scale(0.95); }
 
 /* Toast */
@@ -359,7 +363,7 @@ textarea.field-input { resize: vertical; min-height: 80px; line-height: 1.5; }
 }
 .sync-check-circle {
   width: 64px; height: 64px; border-radius: 50%;
-  background: var(--success-bg); color: var(--success);
+  background: var(--accent-bg); color: var(--accent);
   display: flex; align-items: center; justify-content: center;
   margin: 0 auto 16px;
   animation: check-pop 0.4s ease 0.15s both;
@@ -370,7 +374,7 @@ textarea.field-input { resize: vertical; min-height: 80px; line-height: 1.5; }
   100% { transform: scale(1); }
 }
 .sync-overlay-title {
-  font-family: var(--font-display); font-size: 22px;
+  font-family: var(--font-body); font-size: 22px; font-weight: 700;
   margin-bottom: 6px; color: var(--ink);
 }
 .sync-overlay-desc {
@@ -382,7 +386,7 @@ textarea.field-input { resize: vertical; min-height: 80px; line-height: 1.5; }
   padding: 60px 32px; text-align: center; color: var(--warm-300);
 }
 .empty-icon { margin-bottom: 16px; opacity: 0.4; }
-.empty-title { font-family: var(--font-display); font-size: 24px; color: var(--ink); margin-bottom: 8px; }
+.empty-title { font-weight: 700; font-size: 24px; color: var(--ink); margin-bottom: 8px; }
 .empty-desc { font-size: 14px; line-height: 1.5; margin-bottom: 24px; }
 
 /* Status Pill */
@@ -390,8 +394,8 @@ textarea.field-input { resize: vertical; min-height: 80px; line-height: 1.5; }
   display: inline-flex; align-items: center; gap: 4px;
   padding: 3px 10px; border-radius: 99px; font-size: 11px; font-weight: 600;
 }
-.pill-synced { background: var(--success-bg); color: var(--success); }
-.pill-local { background: var(--accent-bg); color: var(--accent); }
+.pill-synced { background: var(--accent-bg); color: var(--accent); }
+.pill-local { background: var(--warning-bg); color: var(--warning); }
 .pill-error { background: var(--danger-bg); color: var(--danger); }
 
 /* Divider */
@@ -466,7 +470,33 @@ export default function App() {
   const [isOnline, setIsOnline] = useState(true);
   const [supabaseConnected, setSupabaseConnected] = useState(false);
   const [showSetup, setShowSetup] = useState(false);
-  const [syncSuccess, setSyncSuccess] = useState(null); // holds job name on success
+  const [syncSuccess, setSyncSuccess] = useState(null);
+  const [leads, setLeads] = useState([]);
+  const [showAddLead, setShowAddLead] = useState(false);
+
+  // Fetch "In Progress" leads from Supabase
+  const fetchLeads = async () => {
+    if (!SUPABASE_URL || !SUPABASE_ANON_KEY) return;
+    try {
+      const url = `${SUPABASE_URL}/rest/v1/leads?select=id,name,phone,email,street,suburb,postcode,status&status=eq.In%20Progress&order=name.asc`;
+      console.log("Fetching leads from:", url);
+      const res = await fetch(url, {
+        headers: {
+          apikey: SUPABASE_ANON_KEY,
+          Authorization: `Bearer ${SUPABASE_ANON_KEY}`,
+        },
+      });
+      if (!res.ok) {
+        console.error("Leads fetch failed:", res.status, await res.text());
+        return;
+      }
+      const data = await res.json();
+      console.log("Leads loaded:", data.length, data);
+      if (Array.isArray(data)) setLeads(data);
+    } catch (err) {
+      console.error("Failed to fetch leads:", err);
+    }
+  };
 
   // Load from localStorage on mount, then fetch from Supabase
   useEffect(() => {
@@ -540,6 +570,7 @@ export default function App() {
     };
 
     fetchFromSupabase();
+    fetchLeads();
 
     setIsOnline(navigator.onLine);
     const on = () => setIsOnline(true);
@@ -566,9 +597,13 @@ export default function App() {
   const createJob = () => {
     const newJob = {
       id: genId(),
+      lead_id: null,
       lead_name: "",
-      address: "",
       phone: "",
+      email: "",
+      street: "",
+      suburb: "",
+      postcode: "",
       measure_date: "",
       measure_time: "",
       windows: [],
@@ -578,6 +613,24 @@ export default function App() {
     setJobs((prev) => [newJob, ...prev]);
     setCurrentJobId(newJob.id);
     setScreen("job");
+  };
+
+  const selectLead = (leadId) => {
+    const lead = leads.find((l) => String(l.id) === String(leadId));
+    if (!lead) {
+      console.warn("Lead not found. ID:", leadId, "Available:", leads.map(l => ({ id: l.id, name: l.name })));
+      return;
+    }
+    if (!currentJob) return;
+    updateJob(currentJob.id, {
+      lead_id: lead.id,
+      lead_name: lead.name || "",
+      phone: lead.phone || "",
+      email: lead.email || "",
+      street: lead.street || "",
+      suburb: lead.suburb || "",
+      postcode: lead.postcode || "",
+    });
   };
 
   const updateJob = (id, updates) => {
@@ -645,8 +698,13 @@ export default function App() {
       const payload = {
         id: job.id,
         lead_name: job.lead_name || "",
-        address: job.address || "",
         phone: job.phone || "",
+        email: job.email || "",
+        street: job.street || "",
+        suburb: job.suburb || "",
+        postcode: job.postcode || "",
+        address: [job.street, job.suburb, job.postcode].filter(Boolean).join(", "),
+        lead_id: job.lead_id || null,
         measure_date: job.measure_date || null,
         measure_time: job.measure_time || null,
         windows: windowsSummary,
@@ -719,7 +777,7 @@ export default function App() {
                       <div className="job-avatar"><Icons.User size={20} /></div>
                       <div className="job-info">
                         <div className="job-name">{job.lead_name || "Untitled Lead"}</div>
-                        <div className="job-address">{job.address || "No address"}</div>
+                        <div className="job-address">{[job.street, job.suburb, job.postcode].filter(Boolean).join(", ") || job.address || "No address"}</div>
                         <div style={{ marginTop: 4 }}>
                           {job.synced ? (
                             <span className="pill pill-synced"><Icons.Check size={10} /> Synced</span>
@@ -767,32 +825,89 @@ export default function App() {
                 <div className="card" style={{ marginBottom: 16 }}>
                   <div className="card-body">
                     <div className="field">
+                      <label className="field-label">Select Lead</label>
+                      <div style={{ display: "flex", gap: 8 }}>
+                        <select
+                          className="field-input"
+                          style={{ flex: 1 }}
+                          value={currentJob.lead_id || ""}
+                          onChange={(e) => {
+                            if (e.target.value) selectLead(e.target.value);
+                          }}
+                        >
+                          <option value="">— Choose a lead —</option>
+                          {leads.map((lead) => (
+                            <option key={lead.id} value={lead.id}>{lead.name}</option>
+                          ))}
+                        </select>
+                        <button
+                          className="btn btn-primary"
+                          style={{ flexShrink: 0, padding: "10px 14px" }}
+                          onClick={() => setShowAddLead(true)}
+                        >
+                          <Icons.Plus size={16} />
+                        </button>
+                      </div>
+                    </div>
+                    <div className="field">
                       <label className="field-label">Lead Name</label>
                       <input
                         className="field-input"
-                        placeholder="e.g. Sarah Mitchell"
+                        placeholder="Auto-filled from lead"
                         value={currentJob.lead_name}
                         onChange={(e) => updateJob(currentJob.id, { lead_name: e.target.value })}
                       />
                     </div>
-                    <div className="field">
-                      <label className="field-label">Address</label>
-                      <input
-                        className="field-input"
-                        placeholder="e.g. 42 Brunswick St, Fitzroy VIC"
-                        value={currentJob.address}
-                        onChange={(e) => updateJob(currentJob.id, { address: e.target.value })}
-                      />
+                    <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+                      <div className="field">
+                        <label className="field-label">Phone</label>
+                        <input
+                          className="field-input"
+                          type="tel"
+                          placeholder="Auto-filled"
+                          value={currentJob.phone}
+                          onChange={(e) => updateJob(currentJob.id, { phone: e.target.value })}
+                        />
+                      </div>
+                      <div className="field">
+                        <label className="field-label">Email</label>
+                        <input
+                          className="field-input"
+                          type="email"
+                          placeholder="Auto-filled"
+                          value={currentJob.email || ""}
+                          onChange={(e) => updateJob(currentJob.id, { email: e.target.value })}
+                        />
+                      </div>
                     </div>
                     <div className="field">
-                      <label className="field-label">Phone</label>
+                      <label className="field-label">Street</label>
                       <input
                         className="field-input"
-                        type="tel"
-                        placeholder="0412 345 678"
-                        value={currentJob.phone}
-                        onChange={(e) => updateJob(currentJob.id, { phone: e.target.value })}
+                        placeholder="e.g. 42 Brunswick St"
+                        value={currentJob.street || ""}
+                        onChange={(e) => updateJob(currentJob.id, { street: e.target.value })}
                       />
+                    </div>
+                    <div style={{ display: "grid", gridTemplateColumns: "2fr 1fr", gap: 12 }}>
+                      <div className="field">
+                        <label className="field-label">Suburb</label>
+                        <input
+                          className="field-input"
+                          placeholder="e.g. Fitzroy"
+                          value={currentJob.suburb || ""}
+                          onChange={(e) => updateJob(currentJob.id, { suburb: e.target.value })}
+                        />
+                      </div>
+                      <div className="field">
+                        <label className="field-label">Postcode</label>
+                        <input
+                          className="field-input"
+                          placeholder="3065"
+                          value={currentJob.postcode || ""}
+                          onChange={(e) => updateJob(currentJob.id, { postcode: e.target.value })}
+                        />
+                      </div>
                     </div>
                     <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
                       <div className="field">
@@ -924,6 +1039,27 @@ export default function App() {
         {/* Setup Modal */}
         {showSetup && (
           <SetupModal onClose={() => setShowSetup(false)} />
+        )}
+
+        {showAddLead && (
+          <AddLeadModal
+            onClose={() => setShowAddLead(false)}
+            onSaved={(newLead) => {
+              setLeads((prev) => [...prev, newLead].sort((a, b) => (a.name || "").localeCompare(b.name || "")));
+              if (currentJob) {
+                updateJob(currentJob.id, {
+                  lead_id: newLead.id,
+                  lead_name: newLead.name || "",
+                  phone: newLead.phone || "",
+                  email: newLead.email || "",
+                  street: newLead.street || "",
+                  suburb: newLead.suburb || "",
+                  postcode: newLead.postcode || "",
+                });
+              }
+              showToast("Lead added ✓");
+            }}
+          />
         )}
       </div>
     </>
@@ -1161,7 +1297,7 @@ function SetupModal({ onClose }) {
         padding: 24, maxHeight: "80vh", overflow: "auto",
       }}>
         <div className="flex-between mb-16">
-          <h2 style={{ fontFamily: "var(--font-display)", fontSize: 24 }}>Supabase Setup</h2>
+          <h2 style={{ fontWeight: 700, fontSize: 24 }}>Supabase Setup</h2>
           <button className="btn btn-ghost" onClick={onClose}><Icons.X size={20} /></button>
         </div>
 
@@ -1177,9 +1313,14 @@ function SetupModal({ onClose }) {
             fontSize: 11, overflow: "auto", margin: "8px 0", lineHeight: 1.5,
           }}>{`CREATE TABLE check_measures (
   id UUID PRIMARY KEY,
+  lead_id UUID REFERENCES leads(id),
   lead_name TEXT DEFAULT '',
-  address TEXT DEFAULT '',
   phone TEXT DEFAULT '',
+  email TEXT DEFAULT '',
+  street TEXT DEFAULT '',
+  suburb TEXT DEFAULT '',
+  postcode TEXT DEFAULT '',
+  address TEXT DEFAULT '',
   measure_date DATE,
   measure_time TEXT,
   windows JSONB DEFAULT '[]',
@@ -1211,6 +1352,172 @@ VITE_SUPABASE_ANON_KEY=your-anon-key-here`}</pre>
         </p>
 
         <button className="btn btn-primary btn-block" onClick={onClose}>Got it</button>
+      </div>
+    </div>
+  );
+}
+
+// ============================================================
+// ADD LEAD MODAL
+// ============================================================
+const ADD_LEAD_SOURCES = ["Referral","Previous Customer","Facebook","Website Form","Phone Call","Walk In","Shows & Exhibition","Trade Customer","Call & Online","Trade & Repeat"];
+const ADD_LEAD_STATUSES = ["In Progress","Approved","Rejected","Uncontactable","Delayed"];
+const ADD_LEAD_WARMTH = ["","Unlikely","Likely","Verbally Approved"];
+
+const emptyLead = () => ({
+  name: "", email: "", phone: "",
+  street: "", suburb: "", postcode: "",
+  source: ADD_LEAD_SOURCES[0],
+  status: ADD_LEAD_STATUSES[0],
+  warmth: "",
+  first_contact: new Date().toISOString().split("T")[0],
+  next_contact: "", quote_value: "", quote_number: "",
+  book_number: "", cm_date: "", quote_sent_date: "",
+  brief_note: "", detailed_note: "", notes: [],
+});
+
+function AddLeadModal({ onClose, onSaved }) {
+  const [form, setForm] = useState(emptyLead());
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState(null);
+  const set = (k, v) => setForm((f) => ({ ...f, [k]: v }));
+
+  const handleSave = async () => {
+    if (!form.name.trim()) { setError("Lead name is required."); return; }
+    setSaving(true);
+    setError(null);
+    try {
+      const cleaned = { ...form };
+      ["first_contact","next_contact","cm_date","quote_sent_date","approved_date","rejected_date"].forEach((k) => {
+        if (cleaned[k] === "" || cleaned[k] === undefined) cleaned[k] = null;
+      });
+      if (cleaned.quote_value === "" || cleaned.quote_value === undefined) cleaned.quote_value = null;
+      if (Array.isArray(cleaned.notes)) cleaned.notes = JSON.stringify(cleaned.notes);
+
+      const res = await fetch(`${SUPABASE_URL}/rest/v1/leads`, {
+        method: "POST",
+        headers: {
+          apikey: SUPABASE_ANON_KEY,
+          Authorization: `Bearer ${SUPABASE_ANON_KEY}`,
+          "Content-Type": "application/json",
+          Prefer: "return=representation",
+        },
+        body: JSON.stringify(cleaned),
+      });
+      if (!res.ok) throw new Error("Insert failed");
+      const result = await res.json();
+      const newLead = Array.isArray(result) ? result[0] : result;
+      if (onSaved) onSaved(newLead);
+      onClose();
+    } catch (e) {
+      setError("Failed to save. Check your Supabase connection.");
+    }
+    setSaving(false);
+  };
+
+  return (
+    <div style={{
+      position: "fixed", inset: 0, background: "rgba(0,0,0,0.5)", zIndex: 200,
+      display: "flex", alignItems: "center", justifyContent: "center", padding: 16,
+    }} onClick={onClose}>
+      <div style={{
+        background: "#fff", borderRadius: 16, maxWidth: 560, width: "100%",
+        maxHeight: "90vh", overflowY: "auto", padding: 0,
+      }} onClick={(e) => e.stopPropagation()}>
+
+        {/* Header */}
+        <div style={{ padding: "20px 24px 16px", borderBottom: "1px solid var(--warm-100)", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+          <div>
+            <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: "0.1em", color: "var(--warm-300)", textTransform: "uppercase", marginBottom: 4 }}>New Lead</div>
+            <input
+              value={form.name}
+              onChange={(e) => set("name", e.target.value)}
+              placeholder="e.g. Smith Residence"
+              style={{ fontSize: 20, fontWeight: 700, color: "var(--ink)", border: "none", outline: "none", width: "100%", fontFamily: "var(--font-body)", background: "transparent" }}
+            />
+          </div>
+          <button className="btn btn-ghost" onClick={onClose}><Icons.X size={20} /></button>
+        </div>
+
+        {/* Form */}
+        <div style={{ padding: "20px 24px" }}>
+          <div className="section-title" style={{ padding: "0 0 12px" }}>Contact Details</div>
+
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+            <div className="field">
+              <label className="field-label">Phone</label>
+              <input className="field-input" value={form.phone} onChange={(e) => set("phone", e.target.value)} />
+            </div>
+            <div className="field">
+              <label className="field-label">Email</label>
+              <input className="field-input" type="email" value={form.email} onChange={(e) => set("email", e.target.value)} />
+            </div>
+          </div>
+
+          <div className="field">
+            <label className="field-label">Street</label>
+            <input className="field-input" value={form.street} onChange={(e) => set("street", e.target.value)} placeholder="e.g. 42 Example Street" />
+          </div>
+
+          <div style={{ display: "grid", gridTemplateColumns: "2fr 1fr", gap: 12 }}>
+            <div className="field">
+              <label className="field-label">Suburb</label>
+              <input className="field-input" value={form.suburb} onChange={(e) => set("suburb", e.target.value)} />
+            </div>
+            <div className="field">
+              <label className="field-label">Postcode</label>
+              <input className="field-input" value={form.postcode} onChange={(e) => set("postcode", e.target.value)} />
+            </div>
+          </div>
+
+          <div className="divider" />
+          <div className="section-title" style={{ padding: "0 0 12px" }}>Lead Details</div>
+
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+            <div className="field">
+              <label className="field-label">Source</label>
+              <select className="field-input" value={form.source} onChange={(e) => set("source", e.target.value)}>
+                {ADD_LEAD_SOURCES.map((s) => <option key={s}>{s}</option>)}
+              </select>
+            </div>
+            <div className="field">
+              <label className="field-label">Warmth</label>
+              <select className="field-input" value={form.warmth} onChange={(e) => set("warmth", e.target.value)}>
+                {ADD_LEAD_WARMTH.map((s) => <option key={s} value={s}>{s || "—"}</option>)}
+              </select>
+            </div>
+          </div>
+
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+            <div className="field">
+              <label className="field-label">First Contact</label>
+              <input className="field-input" type="date" value={form.first_contact} onChange={(e) => set("first_contact", e.target.value)} />
+            </div>
+            <div className="field">
+              <label className="field-label">Quote Value ($)</label>
+              <input className="field-input" type="number" value={form.quote_value} onChange={(e) => set("quote_value", e.target.value)} placeholder="Optional" />
+            </div>
+          </div>
+
+          <div className="field">
+            <label className="field-label">Brief Note</label>
+            <input className="field-input" value={form.brief_note} onChange={(e) => set("brief_note", e.target.value)} placeholder="One-line summary" />
+          </div>
+
+          {error && (
+            <div style={{ background: "var(--danger-bg)", border: "1px solid #fecaca", borderRadius: 8, padding: "10px 14px", color: "var(--danger)", fontSize: 13, marginBottom: 16 }}>
+              {error}
+            </div>
+          )}
+        </div>
+
+        {/* Footer */}
+        <div style={{ padding: "12px 24px 24px", display: "flex", justifyContent: "flex-end", gap: 10 }}>
+          <button className="btn btn-secondary" onClick={onClose}>Cancel</button>
+          <button className="btn btn-primary" onClick={handleSave} disabled={saving}>
+            {saving ? "Saving…" : "Save Lead"}
+          </button>
+        </div>
       </div>
     </div>
   );

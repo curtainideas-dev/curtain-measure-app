@@ -926,163 +926,110 @@ export default function App() {
   };
 
   // Fetch jobs from Supabase and merge with local
-  const fetchFromSupabase = useCallback(async () => {
+  // Shared function to rebuild jobs from Supabase (used by both auto-poll and manual refresh)
+  const hardSyncFromSupabase = useCallback(async () => {
     if (!SUPABASE_URL || !SUPABASE_ANON_KEY) return;
     try {
       const res = await fetch(
-          `${SUPABASE_URL}/rest/v1/check_measures?select=*,leads(id,name,phone,email,street,suburb,postcode)&order=created_at.desc`,
-          {
-            headers: {
-              apikey: SUPABASE_ANON_KEY,
-              Authorization: `Bearer ${SUPABASE_ANON_KEY}`,
-            },
-          }
-        );
-        if (!res.ok) return;
-        const remoteRows = await res.json();
-        if (!Array.isArray(remoteRows)) return;
-
-        // If Supabase has zero rows, remove all local synced jobs
-        if (remoteRows.length === 0) {
-          setJobs((prev) => prev.filter((j) => !j.synced));
-          setSupabaseConnected(true);
-          setLastRefresh(new Date());
-          return;
+        `${SUPABASE_URL}/rest/v1/check_measures?select=*,leads(id,name,phone,email,street,suburb,postcode,status)&order=created_at.desc`,
+        {
+          headers: {
+            apikey: SUPABASE_ANON_KEY,
+            Authorization: `Bearer ${SUPABASE_ANON_KEY}`,
+          },
         }
+      );
+      if (!res.ok) return;
+      const remoteRows = await res.json();
+      if (!Array.isArray(remoteRows)) return;
 
-        setJobs((prev) => {
-          const remoteIds = new Set(remoteRows.map((r) => r.id));
-          
-          // Remove local synced jobs that no longer exist in Supabase (deleted on another device)
-          const filtered = prev.filter((j) => !j.synced || remoteIds.has(j.id));
-          
-          const localIds = new Set(filtered.map((j) => j.id));
-          const merged = [...filtered];
+      setJobs((prev) => {
+        const remoteIds = new Set(remoteRows.map((r) => r.id));
 
-          for (const row of remoteRows) {
-            if (!localIds.has(row.id)) {
-              const lead = row.leads || {};
-              const windowData = Array.isArray(row.measurements_json) ? row.measurements_json
-                : Array.isArray(row.windows) ? row.windows : [];
-              
-              const windows = windowData.map((w) => {
-                const mainPhoto = w.main_photo_url || w.main_photo || null;
-                const extraPhotos = w.extra_photo_urls || w.extra_photos || [];
-                return {
-                  id: w.id || crypto.randomUUID?.() || `${Date.now()}-${Math.random().toString(36).slice(2,9)}`,
-                  label: w.label || "Window",
-                  main_photo: mainPhoto,
-                  main_photo_url: mainPhoto,
-                  extra_photos: extraPhotos,
-                  extra_photo_urls: extraPhotos,
-                  measurements: w.measurements || {},
-                  comments: w.comments || "",
-                };
+        // Keep local-only unsynced jobs that aren't in Supabase yet
+        const localOnly = prev.filter((j) => !j.synced && !remoteIds.has(j.id));
+
+        // Rebuild all remote jobs fresh from cloud
+        const remoteJobs = remoteRows.map((row) => {
+          const lead = row.leads || {};
+          const windowData = Array.isArray(row.measurements_json) ? row.measurements_json
+            : Array.isArray(row.windows) ? row.windows : [];
+
+          // Check if we have local base64 photos to preserve
+          const localJob = prev.find((j) => j.id === row.id);
+
+          const windows = windowData.map((rw) => {
+            const lw = localJob?.windows?.find((l) => l.id === rw.id);
+            const cloudMain = rw.main_photo_url || rw.main_photo || null;
+            const cloudExtras = rw.extra_photo_urls || rw.extra_photos || [];
+
+            // Only keep local base64 if not yet uploaded
+            const localMainIsBase64 = lw?.main_photo && lw.main_photo.startsWith("data:");
+            const mainPhoto = localMainIsBase64 ? lw.main_photo : cloudMain;
+
+            const mergedExtras = [...cloudExtras];
+            if (lw?.extra_photos) {
+              lw.extra_photos.forEach((lp) => {
+                if (lp && lp.startsWith("data:")) mergedExtras.push(lp);
               });
-
-              merged.push({
-                id: row.id,
-                lead_id: row.lead_id || null,
-                lead_name: lead.name || "",
-                phone: lead.phone || "",
-                email: lead.email || "",
-                street: lead.street || "",
-                suburb: lead.suburb || "",
-                postcode: lead.postcode || "",
-                status: lead.status || "In Progress",
-                measure_date: row.measure_date || "",
-                measure_time: row.measure_time || "",
-                windows,
-                synced: true,
-                created_at: row.created_at,
-              });
-            } else {
-              // Update local job with cloud data (windows, photos, status)
-              const idx = merged.findIndex((j) => j.id === row.id);
-              if (idx !== -1) {
-                const localJob = merged[idx];
-                const lead = row.leads || {};
-                const windowData = Array.isArray(row.measurements_json) ? row.measurements_json
-                  : Array.isArray(row.windows) ? row.windows : [];
-                
-                // Rebuild windows from cloud, merging local and cloud photos
-                const updatedWindows = windowData.map((rw) => {
-                  const lw = localJob.windows.find((l) => l.id === rw.id);
-                  
-                  // Cloud URLs are the source of truth
-                  const cloudMain = rw.main_photo_url || rw.main_photo || null;
-                  const cloudExtras = rw.extra_photo_urls || rw.extra_photos || [];
-
-                  console.log("[MERGE] Window:", rw.id, "cloud main:", cloudMain?.substring(0, 50), "cloud extras:", cloudExtras.length, "local extras:", lw?.extra_photos?.length || 0);
-
-                  // Only keep local base64 if cloud doesn't have it yet (not yet uploaded)
-                  const localMainIsBase64 = lw?.main_photo && lw.main_photo.startsWith("data:");
-                  const mainPhoto = localMainIsBase64 ? lw.main_photo : cloudMain;
-
-                  // For extras: start with cloud, append any local base64 not yet uploaded
-                  const mergedExtras = [...cloudExtras];
-                  if (lw?.extra_photos) {
-                    lw.extra_photos.forEach((lp) => {
-                      if (lp && lp.startsWith("data:")) {
-                        mergedExtras.push(lp);
-                      }
-                    });
-                  }
-
-                  console.log("[MERGE] Result - main:", mainPhoto?.substring(0, 50), "extras:", mergedExtras.length, mergedExtras.map(e => e?.substring(0, 40)));
-
-                  return {
-                    id: rw.id || genId(),
-                    label: rw.label || lw?.label || "Window",
-                    main_photo: mainPhoto,
-                    main_photo_url: cloudMain,
-                    extra_photos: mergedExtras,
-                    extra_photo_urls: cloudExtras,
-                    measurements: rw.measurements || lw?.measurements || {},
-                    comments: rw.comments || lw?.comments || "",
-                  };
-                });
-
-                // Also keep any local-only windows not yet synced
-                localJob.windows.forEach((lw) => {
-                  if (!windowData.find((rw) => rw.id === lw.id)) {
-                    updatedWindows.push(lw);
-                  }
-                });
-                
-                merged[idx] = {
-                  ...localJob,
-                  lead_name: lead.name || localJob.lead_name || "",
-                  phone: lead.phone || localJob.phone || "",
-                  email: lead.email || localJob.email || "",
-                  street: lead.street || localJob.street || "",
-                  suburb: lead.suburb || localJob.suburb || "",
-                  postcode: lead.postcode || localJob.postcode || "",
-                  status: lead.status || localJob.status || "In Progress",
-                  measure_date: row.measure_date || localJob.measure_date || "",
-                  measure_time: row.measure_time || localJob.measure_time || "",
-                  windows: updatedWindows,
-                  synced: true,
-                };
-              }
             }
+
+            // Also keep any local-only windows not in cloud yet
+            return {
+              id: rw.id || genId(),
+              label: rw.label || "Window",
+              main_photo: mainPhoto,
+              main_photo_url: cloudMain,
+              extra_photos: mergedExtras,
+              extra_photo_urls: cloudExtras,
+              measurements: rw.measurements || {},
+              comments: rw.comments || "",
+            };
+          });
+
+          // Append local-only windows not yet synced
+          if (localJob) {
+            localJob.windows.forEach((lw) => {
+              if (!windowData.find((rw) => rw.id === lw.id)) {
+                windows.push(lw);
+              }
+            });
           }
-          return merged;
+
+          return {
+            id: row.id,
+            lead_id: row.lead_id || null,
+            lead_name: lead.name || "",
+            phone: lead.phone || "",
+            email: lead.email || "",
+            street: lead.street || "",
+            suburb: lead.suburb || "",
+            postcode: lead.postcode || "",
+            status: lead.status || "In Progress",
+            measure_date: row.measure_date || "",
+            measure_time: row.measure_time || "",
+            windows,
+            synced: true,
+            created_at: row.created_at,
+          };
         });
 
-        setSupabaseConnected(true);
-        setLastRefresh(new Date());
-      } catch (err) {
-        console.error("Supabase fetch error:", err);
-      }
+        return [...localOnly, ...remoteJobs];
+      });
+
+      setSupabaseConnected(true);
+      setLastRefresh(new Date());
+    } catch (err) {
+      console.error("Supabase fetch error:", err);
+    }
   }, []);
 
   // Manual refresh
   const manualRefresh = useCallback(async () => {
     setRefreshing(true);
-    await Promise.all([fetchFromSupabase(), fetchLeads()]);
+    await Promise.all([hardSyncFromSupabase(), fetchLeads()]);
     setRefreshing(false);
-  }, [fetchFromSupabase]);
+  }, [hardSyncFromSupabase]);
 
   // Load from localStorage on mount, then fetch from Supabase
   useEffect(() => {
@@ -1091,14 +1038,14 @@ export default function App() {
       if (saved) setJobs(JSON.parse(saved));
     } catch {}
 
-    fetchFromSupabase();
+    hardSyncFromSupabase();
     fetchLeads();
 
     // Poll every 30 seconds
     const interval = setInterval(() => {
-      fetchFromSupabase();
+      hardSyncFromSupabase();
       fetchLeads();
-    }, 30000);
+    }, 10000);
 
     setIsOnline(navigator.onLine);
     const on = () => setIsOnline(true);
@@ -1204,8 +1151,8 @@ export default function App() {
             // Update local jobs: replace base64 with cloud URLs in BOTH arrays
             setJobs((prev) => prev.map((j) => {
               if (j.id !== job.id) return j;
-              const updatedWindows = j.windows.map((w, i) => {
-                const summary = windowsSummary[i];
+              const updatedWindows = j.windows.map((w) => {
+                const summary = windowsSummary.find((s) => s.id === w.id);
                 if (!summary) return w;
                 return {
                   ...w,
@@ -1504,8 +1451,8 @@ export default function App() {
       // Update local jobs: replace base64 with cloud URLs in both arrays
       setJobs((prev) => prev.map((j) => {
         if (j.id !== jobId) return j;
-        const updatedWindows = j.windows.map((w, i) => {
-          const summary = windowsSummary[i];
+        const updatedWindows = j.windows.map((w) => {
+          const summary = windowsSummary.find((s) => s.id === w.id);
           if (!summary) return w;
           return {
             ...w,

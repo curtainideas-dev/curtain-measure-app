@@ -238,14 +238,14 @@ textarea.field-input { resize: vertical; min-height: 80px; line-height: 1.5; }
 
 /* Photo Area */
 .photo-main {
-  width: 100%; aspect-ratio: 4/3; background: var(--warm-100);
+  width: 100%; min-height: 120px; background: var(--warm-100);
   border-radius: var(--radius-sm); display: flex; flex-direction: column;
   align-items: center; justify-content: center; gap: 8px;
   cursor: pointer; border: 2px dashed var(--warm-200); transition: all 0.2s;
   overflow: hidden; position: relative;
 }
 .photo-main:hover { border-color: var(--accent); background: var(--accent-bg); }
-.photo-main img { width: 100%; height: 100%; object-fit: cover; position: absolute; inset: 0; }
+.photo-main img { width: 100%; height: auto; display: block; }
 .photo-main-label { font-size: 12px; color: var(--warm-300); font-weight: 500; }
 
 .photo-strip { display: flex; gap: 8px; overflow-x: auto; padding: 4px 0; }
@@ -627,7 +627,12 @@ const exportJobPDF = async (job, showToast) => {
     };
 
     // Calculate total pages: 1 cover + ceil(windows/2)
-    const totalPages = 1 + Math.ceil(job.windows.length / 2);
+    // Estimate pages: 1 cover + 1 per window (may overflow to extra pages for many extra photos)
+    let totalPages = 1 + job.windows.length;
+    job.windows.forEach((w) => {
+      const extras = w.extra_photos?.filter(Boolean) || [];
+      if (extras.length > 4) totalPages += Math.ceil((extras.length - 4) / 4);
+    });
 
     // ---- PAGE 1: COVER ----
     y = await addHeader(1, totalPages);
@@ -638,9 +643,19 @@ const exportJobPDF = async (job, showToast) => {
     doc.text("Check Measure Report", mx, y + 8);
     y += 16;
 
-    // Lead details box
+    const address = [job.street, job.suburb, job.postcode].filter(Boolean).join(", ");
+    const dateStr = job.measure_date ? new Date(job.measure_date).toLocaleDateString("en-AU", { day: "numeric", month: "long", year: "numeric" }) : "";
+
+    // Lead details box - calculate height dynamically
+    let leadBoxHeight = 18; // base padding
+    if (job.lead_name) leadBoxHeight += 6;
+    if (address) leadBoxHeight += 5;
+    if (job.phone) leadBoxHeight += 5;
+    if (job.email) leadBoxHeight += 5;
+    if (dateStr || job.measure_time) leadBoxHeight += 5;
+
     doc.setFillColor(241, 245, 249);
-    doc.roundedRect(mx, y, cw, 52, 3, 3, "F");
+    doc.roundedRect(mx, y, cw, leadBoxHeight, 3, 3, "F");
     y += 8;
     doc.setFontSize(10);
     doc.setFont("helvetica", "bold");
@@ -656,36 +671,38 @@ const exportJobPDF = async (job, showToast) => {
 
     doc.setFont("helvetica", "normal");
     doc.setFontSize(10);
-    const address = [job.street, job.suburb, job.postcode].filter(Boolean).join(", ");
     if (address) { doc.text(address, mx + 6, y); y += 5; }
     if (job.phone) { doc.text(`Phone: ${job.phone}`, mx + 6, y); y += 5; }
     if (job.email) { doc.text(`Email: ${job.email}`, mx + 6, y); y += 5; }
 
-    const dateStr = job.measure_date ? new Date(job.measure_date).toLocaleDateString("en-AU", { day: "numeric", month: "long", year: "numeric" }) : "";
     if (dateStr || job.measure_time) {
       doc.text(`Measure: ${dateStr}${job.measure_time ? " at " + job.measure_time : ""}`, mx + 6, y);
     }
 
-    y += 16;
+    // Move below the lead details box
+    y = y - 8 + leadBoxHeight + 4;
 
-    // Window summary table
-    doc.setFontSize(10);
+    // Window summary - separate section
+    y += 10;
+    doc.setFontSize(12);
     doc.setFont("helvetica", "bold");
-    doc.setTextColor(148, 163, 184);
-    doc.text("WINDOW SUMMARY", mx, y);
-    y += 6;
+    doc.setTextColor(28, 46, 15);
+    doc.text("Window Summary", mx, y);
+    y += 8;
 
     doc.setFillColor(28, 46, 15);
     doc.rect(mx, y, cw, 7, "F");
     doc.setTextColor(255, 255, 255);
-    doc.setFontSize(8);
+    doc.setFontSize(7);
     doc.setFont("helvetica", "bold");
-    doc.text("#", mx + 3, y + 5);
-    doc.text("Window", mx + 12, y + 5);
-    doc.text("Inside W", mx + 70, y + 5);
-    doc.text("Inside L", mx + 95, y + 5);
-    doc.text("Treatment W", mx + 120, y + 5);
-    doc.text("Treatment D", mx + 150, y + 5);
+    doc.text("#", mx + 2, y + 5);
+    doc.text("Window", mx + 9, y + 5);
+    doc.text("In W", mx + 52, y + 5);
+    doc.text("In L", mx + 68, y + 5);
+    doc.text("Out W", mx + 84, y + 5);
+    doc.text("Out L", mx + 100, y + 5);
+    doc.text("Trt W", mx + 118, y + 5);
+    doc.text("Trt D", mx + 136, y + 5);
     y += 7;
 
     doc.setTextColor(15, 23, 42);
@@ -694,134 +711,169 @@ const exportJobPDF = async (job, showToast) => {
       const bg = i % 2 === 0 ? 248 : 241;
       doc.setFillColor(bg, bg, bg);
       doc.rect(mx, y, cw, 6, "F");
-      doc.text(`${i + 1}`, mx + 3, y + 4.5);
-      doc.text(w.label || "—", mx + 12, y + 4.5);
-      doc.text(w.measurements?.inside_width || "—", mx + 70, y + 4.5);
-      doc.text(w.measurements?.inside_length || "—", mx + 95, y + 4.5);
-      doc.text(w.measurements?.treatment_width || "—", mx + 120, y + 4.5);
-      doc.text(w.measurements?.treatment_drop || "—", mx + 150, y + 4.5);
+      doc.setFontSize(7);
+      doc.text(`${i + 1}`, mx + 2, y + 4.5);
+      doc.text((w.label || "—").substring(0, 20), mx + 9, y + 4.5);
+      doc.text(w.measurements?.inside_width || "—", mx + 52, y + 4.5);
+      doc.text(w.measurements?.inside_length || "—", mx + 68, y + 4.5);
+      doc.text(w.measurements?.outside_width || "—", mx + 84, y + 4.5);
+      doc.text(w.measurements?.outside_length || "—", mx + 100, y + 4.5);
+      doc.text(w.measurements?.treatment_width || "—", mx + 118, y + 4.5);
+      doc.text(w.measurements?.treatment_drop || "—", mx + 136, y + 4.5);
       y += 6;
     });
 
-    // ---- WINDOW PAGES: 2 per page ----
-    for (let i = 0; i < job.windows.length; i += 2) {
-      doc.addPage();
-      const pageNum = 2 + Math.floor(i / 2);
-      y = await addHeader(pageNum, totalPages);
+    // ---- WINDOW PAGES ----
+    // Each window: title + main photo + measurements + comments + extra photos (same size as main)
+    // Dynamic page breaks based on content height
 
-      for (let slot = 0; slot < 2; slot++) {
-        const wIdx = i + slot;
-        if (wIdx >= job.windows.length) break;
-        const w = job.windows[wIdx];
-        const slotY = y + slot * 130; // Each window gets ~130mm
-
-        // Window title
-        doc.setFontSize(12);
-        doc.setFont("helvetica", "bold");
-        doc.setTextColor(28, 46, 15);
-        doc.text(`Window ${wIdx + 1}: ${w.label || ""}`, mx, slotY + 6);
-
-        // Photo
-        let photoEndX = mx;
-        const photoSrc = w.main_photo || w.main_photo_url;
-        if (photoSrc) {
-          try {
-            const img = await loadImage(photoSrc);
-            if (img) {
-              const maxW = 70, maxH = 52;
-              let iw = img.width, ih = img.height;
-              const scale = Math.min(maxW / iw, maxH / ih);
-              iw *= scale; ih *= scale;
-              doc.addImage(img, "JPEG", mx, slotY + 9, iw, ih);
-              photoEndX = mx + iw + 4;
-            }
-          } catch {}
+    const renderPhoto = async (src, startY, pageNum) => {
+      try {
+        const img = await loadImage(src);
+        if (img) {
+          const maxW = 70, maxH = 52;
+          let iw = img.width, ih = img.height;
+          const scale = Math.min(maxW / iw, maxH / ih);
+          iw *= scale; ih *= scale;
+          doc.addImage(img, "JPEG", mx, startY, iw, ih);
+          return { endX: mx + iw + 4, height: ih };
         }
+      } catch {}
+      return { endX: mx, height: 0 };
+    };
 
-        // Measurements table beside photo
-        const measX = Math.max(photoEndX, mx + 74);
-        const measFields = [
-          ["Inside Width", w.measurements?.inside_width],
-          ["Outside Width", w.measurements?.outside_width],
-          ["Inside Length", w.measurements?.inside_length],
-          ["Outside Length", w.measurements?.outside_length],
-          ["Treatment Width", w.measurements?.treatment_width],
-          ["Treatment Drop", w.measurements?.treatment_drop],
-          ["L Wall → Arch.", w.measurements?.left_wall_to_arch],
-          ["R Wall → Arch.", w.measurements?.right_wall_to_arch],
-          ["Arch. → Ceiling", w.measurements?.arch_to_ceiling],
-          ["Arch. → Floor", w.measurements?.arch_to_floor],
-        ];
+    let currentPage = 1;
 
-        let my = slotY + 9;
-        // Table header
-        doc.setFillColor(28, 46, 15);
-        doc.rect(measX, my, mxr - measX, 6, "F");
-        doc.setTextColor(255, 255, 255);
+    for (let wIdx = 0; wIdx < job.windows.length; wIdx++) {
+      const w = job.windows[wIdx];
+
+      // Calculate how much space this window needs
+      const extras = w.extra_photos?.filter(Boolean) || [];
+      const mainPhotoH = 52;
+      const measTableH = 62;
+      const commentsH = w.comments ? 18 : 0;
+      const extraPhotosH = extras.length > 0 ? (Math.ceil(extras.length / 2) * 58) : 0;
+      const totalNeeded = 10 + Math.max(mainPhotoH, measTableH) + commentsH + extraPhotosH + 10;
+
+      // Start new page for each window (or check if fits on current page)
+      doc.addPage();
+      currentPage++;
+      y = await addHeader(currentPage, totalPages);
+
+      // Window title
+      doc.setFontSize(12);
+      doc.setFont("helvetica", "bold");
+      doc.setTextColor(28, 46, 15);
+      doc.text(`Window ${wIdx + 1}: ${w.label || ""}`, mx, y + 6);
+
+      // Main photo
+      const photoSrc = w.main_photo || w.main_photo_url;
+      let photoEndX = mx;
+      if (photoSrc) {
+        const result = await renderPhoto(photoSrc, y + 9);
+        photoEndX = result.endX;
+      }
+
+      // Measurements table beside photo
+      const measX = Math.max(photoEndX, mx + 74);
+      const measFields = [
+        ["Inside Width", w.measurements?.inside_width],
+        ["Outside Width", w.measurements?.outside_width],
+        ["Inside Length", w.measurements?.inside_length],
+        ["Outside Length", w.measurements?.outside_length],
+        ["Treatment Width", w.measurements?.treatment_width],
+        ["Treatment Drop", w.measurements?.treatment_drop],
+        ["L Wall to Arch.", w.measurements?.left_wall_to_arch],
+        ["R Wall to Arch.", w.measurements?.right_wall_to_arch],
+        ["Arch. to Ceiling", w.measurements?.arch_to_ceiling],
+        ["Arch. to Floor", w.measurements?.arch_to_floor],
+      ];
+
+      let my = y + 9;
+      doc.setFillColor(28, 46, 15);
+      doc.rect(measX, my, mxr - measX, 6, "F");
+      doc.setTextColor(255, 255, 255);
+      doc.setFontSize(7);
+      doc.setFont("helvetica", "bold");
+      doc.text("Measurement", measX + 2, my + 4.5);
+      doc.text("mm", mxr - 2, my + 4.5, { align: "right" });
+      my += 6;
+
+      doc.setTextColor(15, 23, 42);
+      doc.setFont("helvetica", "normal");
+      measFields.forEach(([label, val], mi) => {
+        const bg = mi % 2 === 0 ? 248 : 241;
+        doc.setFillColor(bg, bg, bg);
+        doc.rect(measX, my, mxr - measX, 5, "F");
+        doc.setFontSize(7);
+        doc.text(label, measX + 2, my + 3.8);
+        doc.setFont("helvetica", "bold");
+        doc.text(val || "—", mxr - 2, my + 3.8, { align: "right" });
+        doc.setFont("helvetica", "normal");
+        my += 5;
+      });
+
+      // Comments
+      let contentY = y + 9 + Math.max(52, 56) + 4;
+      if (w.comments) {
+        doc.setFillColor(242, 249, 231);
+        doc.roundedRect(mx, contentY, cw, 14, 2, 2, "F");
         doc.setFontSize(7);
         doc.setFont("helvetica", "bold");
-        doc.text("Measurement", measX + 2, my + 4.5);
-        doc.text("mm", mxr - 2, my + 4.5, { align: "right" });
-        my += 6;
-
-        doc.setTextColor(15, 23, 42);
+        doc.setTextColor(141, 199, 63);
+        doc.text("COMMENTS", mx + 3, contentY + 4);
         doc.setFont("helvetica", "normal");
-        measFields.forEach(([label, val], mi) => {
-          const bg = mi % 2 === 0 ? 248 : 241;
-          doc.setFillColor(bg, bg, bg);
-          doc.rect(measX, my, mxr - measX, 5, "F");
-          doc.setFontSize(7);
-          doc.text(label, measX + 2, my + 3.8);
-          doc.setFont("helvetica", "bold");
-          doc.text(val || "—", mxr - 2, my + 3.8, { align: "right" });
-          doc.setFont("helvetica", "normal");
-          my += 5;
-        });
+        doc.setTextColor(15, 23, 42);
+        doc.setFontSize(8);
+        const lines = doc.splitTextToSize(w.comments, cw - 6);
+        doc.text(lines.slice(0, 2), mx + 3, contentY + 9);
+        contentY += 18;
+      }
 
-        // Comments
-        if (w.comments) {
-          const commY = slotY + 65;
-          doc.setFillColor(242, 249, 231);
-          doc.roundedRect(mx, commY, cw, 14, 2, 2, "F");
-          doc.setFontSize(7);
-          doc.setFont("helvetica", "bold");
-          doc.setTextColor(141, 199, 63);
-          doc.text("COMMENTS", mx + 3, commY + 4);
-          doc.setFont("helvetica", "normal");
-          doc.setTextColor(15, 23, 42);
-          doc.setFontSize(8);
-          const lines = doc.splitTextToSize(w.comments, cw - 6);
-          doc.text(lines.slice(0, 2), mx + 3, commY + 9);
-        }
+      // Extra photos - same size as main photo, 2 per row
+      if (extras.length > 0) {
+        contentY += 4;
+        doc.setFontSize(9);
+        doc.setFont("helvetica", "bold");
+        doc.setTextColor(148, 163, 184);
+        doc.text("ADDITIONAL PHOTOS", mx, contentY);
+        contentY += 5;
 
-        // Extra photos strip
-        const extras = w.extra_photos?.filter(Boolean) || [];
-        if (extras.length > 0) {
-          let ex = mx;
-          const eY = slotY + (w.comments ? 82 : 65);
-          for (let ei = 0; ei < Math.min(extras.length, 5); ei++) {
-            try {
-              const eImg = await loadImage(extras[ei]);
-              if (eImg) {
-                doc.addImage(eImg, "JPEG", ex, eY, 30, 22);
-                ex += 33;
-              }
-            } catch {}
+        for (let ei = 0; ei < extras.length; ei++) {
+          const col = ei % 2;
+          const colX = mx + col * (cw / 2 + 2);
+
+          // Check if we need a new page
+          if (contentY + 55 > ph - 15) {
+            doc.addPage();
+            currentPage++;
+            contentY = await addHeader(currentPage, totalPages);
+            contentY += 4;
           }
-        }
 
-        // Divider between windows
-        if (slot === 0 && i + 1 < job.windows.length) {
-          const divY = slotY + 126;
-          doc.setDrawColor(226, 232, 240);
-          doc.setLineWidth(0.3);
-          doc.line(mx, divY, mxr, divY);
+          try {
+            const eImg = await loadImage(extras[ei]);
+            if (eImg) {
+              const maxW = 70, maxH = 52;
+              let ew = eImg.width, eh = eImg.height;
+              const scale = Math.min(maxW / ew, maxH / eh);
+              ew *= scale; eh *= scale;
+              doc.addImage(eImg, "JPEG", colX, contentY, ew, eh);
+            }
+          } catch {}
+
+          // Move to next row after every 2 photos
+          if (col === 1 || ei === extras.length - 1) {
+            contentY += 55;
+          }
         }
       }
     }
 
     // Save
-    const filename = `${(job.lead_name || "measure").replace(/\s+/g, "_")}_check_measure.pdf`;
+    const namePart = (job.lead_name || "measure").replace(/\s+/g, "_");
+    const addressPart = [job.street, job.suburb].filter(Boolean).join("_").replace(/\s+/g, "_");
+    const filename = `${namePart}${addressPart ? "_" + addressPart : ""}_CM.pdf`;
     doc.save(filename);
     showToast("PDF downloaded ✓");
   } catch (err) {
@@ -1064,14 +1116,37 @@ export default function App() {
     autoSyncTimer.current = setTimeout(async () => {
       for (const job of allUnsynced) {
         try {
-          const windowsSummary = job.windows.map((w) => ({
-            id: w.id,
-            label: w.label,
-            measurements: w.measurements,
-            comments: w.comments,
-            main_photo_url: w.main_photo_url || null,
-            extra_photo_urls: w.extra_photo_urls || [],
-          }));
+          // Upload any base64 photos to Supabase Storage
+          const windowsSummary = [];
+          for (const w of job.windows) {
+            let mainPhotoUrl = w.main_photo_url || null;
+            const extraPhotoUrls = [...(w.extra_photo_urls || [])];
+
+            // Upload main photo if base64
+            if (w.main_photo && w.main_photo.startsWith("data:")) {
+              const url = await uploadPhoto(w.main_photo, `${job.id}/${w.id}/main.jpg`);
+              if (url) mainPhotoUrl = url;
+            }
+
+            // Upload extra photos if base64
+            for (let i = 0; i < (w.extra_photos?.length || 0); i++) {
+              if (w.extra_photos[i] && w.extra_photos[i].startsWith("data:")) {
+                const url = await uploadPhoto(w.extra_photos[i], `${job.id}/${w.id}/extra_${i}.jpg`);
+                if (url) extraPhotoUrls[i] = url;
+              } else if (!extraPhotoUrls[i] && w.extra_photos[i]) {
+                extraPhotoUrls[i] = w.extra_photos[i];
+              }
+            }
+
+            windowsSummary.push({
+              id: w.id,
+              label: w.label,
+              measurements: w.measurements,
+              comments: w.comments,
+              main_photo_url: mainPhotoUrl,
+              extra_photo_urls: extraPhotoUrls,
+            });
+          }
 
           const payload = {
             id: job.id,
@@ -1095,7 +1170,16 @@ export default function App() {
           });
 
           if (res.ok) {
-            setJobs((prev) => prev.map((j) => (j.id === job.id ? { ...j, synced: true } : j)));
+            // Update local jobs with cloud URLs so we don't re-upload
+            setJobs((prev) => prev.map((j) => {
+              if (j.id !== job.id) return j;
+              const updatedWindows = j.windows.map((w, i) => ({
+                ...w,
+                main_photo_url: windowsSummary[i]?.main_photo_url || w.main_photo_url || null,
+                extra_photo_urls: windowsSummary[i]?.extra_photo_urls || w.extra_photo_urls || [],
+              }));
+              return { ...j, windows: updatedWindows, synced: true };
+            }));
           }
         } catch (err) {
           console.error("Auto-sync failed for job:", job.id, err);
@@ -1835,10 +1919,7 @@ function WindowDetail({ job, window: win, windowIdx, totalWindows, onBack, onUpd
     if (files.length === 0) return;
     const rawUrls = await Promise.all(files.map(readFileAsDataURL));
     const urls = await Promise.all(rawUrls.map((u) => compressImage(u)));
-    // Open drawing editor for the first new photo
-    const newIndex = win.extra_photos.length;
     onUpdate({ extra_photos: [...win.extra_photos, ...urls] });
-    setDrawingPhoto({ src: urls[0], target: newIndex });
   };
 
   const removeExtraPhoto = (idx) => {

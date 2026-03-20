@@ -473,6 +473,38 @@ textarea.field-input { resize: vertical; min-height: 80px; line-height: 1.5; }
   padding: 12px 16px; background: #111; flex-shrink: 0;
 }
 
+/* Tabs */
+.tab-bar {
+  display: flex; padding: 0 16px; gap: 0;
+  background: var(--paper); border-bottom: 2px solid var(--warm-200);
+}
+.tab-btn {
+  flex: 1; padding: 12px 0; text-align: center;
+  font-size: 13px; font-weight: 600; color: var(--warm-300);
+  background: none; border: none; cursor: pointer;
+  border-bottom: 2px solid transparent; margin-bottom: -2px;
+  transition: all 0.15s;
+}
+.tab-btn.active {
+  color: var(--accent); border-bottom-color: var(--accent);
+}
+.tab-btn:hover:not(.active) { color: var(--ink); }
+
+/* Status pill colors */
+.pill-status-approved { background: var(--success-bg); color: var(--success); }
+.pill-status-rejected { background: var(--danger-bg); color: var(--danger); }
+.pill-status-delayed { background: #FFF7ED; color: #C2410C; }
+.pill-status-uncontactable { background: var(--warm-100); color: var(--warm-300); }
+.pill-status-inprogress { background: var(--accent-bg); color: var(--accent); }
+
+/* Read-only field */
+.field-input[disabled], .field-input:disabled,
+.meas-input[disabled], .meas-input:disabled,
+select.field-input[disabled], select.field-input:disabled {
+  background: var(--warm-100); color: var(--warm-300); cursor: not-allowed;
+  opacity: 0.8;
+}
+
 /* Utility */
 .scroll-area { flex: 1; overflow-y: auto; -webkit-overflow-scrolling: touch; padding-bottom: 80px; }
 .p-16 { padding: 16px; }
@@ -815,13 +847,15 @@ export default function App() {
   const [showAddLead, setShowAddLead] = useState(false);
   const [lastRefresh, setLastRefresh] = useState(null);
   const [refreshing, setRefreshing] = useState(false);
+  const [activeTab, setActiveTab] = useState("active"); // "active" | "history"
 
-  // Fetch "In Progress" leads from Supabase
+  const STATUS_OPTIONS = ["In Progress", "Approved", "Rejected", "Uncontactable", "Delayed"];
+
+  // Fetch ALL leads from Supabase (we filter in the dropdown)
   const fetchLeads = async () => {
     if (!SUPABASE_URL || !SUPABASE_ANON_KEY) return;
     try {
-      const url = `${SUPABASE_URL}/rest/v1/leads?select=id,name,phone,email,street,suburb,postcode,status&status=eq.In%20Progress&order=name.asc`;
-      console.log("Fetching leads from:", url);
+      const url = `${SUPABASE_URL}/rest/v1/leads?select=id,name,phone,email,street,suburb,postcode,status&order=name.asc`;
       const res = await fetch(url, {
         headers: {
           apikey: SUPABASE_ANON_KEY,
@@ -833,7 +867,6 @@ export default function App() {
         return;
       }
       const data = await res.json();
-      console.log("Leads loaded:", data.length, data);
       if (Array.isArray(data)) setLeads(data);
     } catch (err) {
       console.error("Failed to fetch leads:", err);
@@ -904,6 +937,7 @@ export default function App() {
                 street: lead.street || "",
                 suburb: lead.suburb || "",
                 postcode: lead.postcode || "",
+                status: lead.status || "In Progress",
                 measure_date: row.measure_date || "",
                 measure_time: row.measure_time || "",
                 windows,
@@ -911,27 +945,50 @@ export default function App() {
                 created_at: row.created_at,
               });
             } else {
-              // Update local job with cloud data (photos, synced status)
+              // Update local job with cloud data (windows, photos, status)
               const idx = merged.findIndex((j) => j.id === row.id);
               if (idx !== -1) {
                 const localJob = merged[idx];
+                const lead = row.leads || {};
                 const windowData = Array.isArray(row.measurements_json) ? row.measurements_json
                   : Array.isArray(row.windows) ? row.windows : [];
                 
-                // Update windows with cloud photo URLs where local photos are missing
-                const updatedWindows = localJob.windows.map((lw) => {
-                  const rw = windowData.find((r) => r.id === lw.id);
-                  if (!rw) return lw;
+                // Rebuild windows from cloud, preserving local base64 photos where available
+                const updatedWindows = windowData.map((rw) => {
+                  const lw = localJob.windows.find((l) => l.id === rw.id);
                   return {
-                    ...lw,
-                    main_photo: lw.main_photo || rw.main_photo_url || rw.main_photo || lw.main_photo,
-                    main_photo_url: rw.main_photo_url || lw.main_photo_url || null,
-                    extra_photos: lw.extra_photos.length > 0 ? lw.extra_photos : (rw.extra_photo_urls || rw.extra_photos || []),
-                    extra_photo_urls: rw.extra_photo_urls || lw.extra_photo_urls || [],
+                    id: rw.id || genId(),
+                    label: rw.label || lw?.label || "Window",
+                    main_photo: lw?.main_photo || rw.main_photo_url || rw.main_photo || null,
+                    main_photo_url: rw.main_photo_url || lw?.main_photo_url || null,
+                    extra_photos: (lw?.extra_photos?.length > 0 ? lw.extra_photos : null) || rw.extra_photo_urls || rw.extra_photos || [],
+                    extra_photo_urls: rw.extra_photo_urls || lw?.extra_photo_urls || [],
+                    measurements: rw.measurements || lw?.measurements || {},
+                    comments: rw.comments || lw?.comments || "",
                   };
                 });
+
+                // Also keep any local-only windows not yet synced
+                localJob.windows.forEach((lw) => {
+                  if (!windowData.find((rw) => rw.id === lw.id)) {
+                    updatedWindows.push(lw);
+                  }
+                });
                 
-                merged[idx] = { ...localJob, windows: updatedWindows, synced: true };
+                merged[idx] = {
+                  ...localJob,
+                  lead_name: lead.name || localJob.lead_name || "",
+                  phone: lead.phone || localJob.phone || "",
+                  email: lead.email || localJob.email || "",
+                  street: lead.street || localJob.street || "",
+                  suburb: lead.suburb || localJob.suburb || "",
+                  postcode: lead.postcode || localJob.postcode || "",
+                  status: lead.status || localJob.status || "In Progress",
+                  measure_date: row.measure_date || localJob.measure_date || "",
+                  measure_time: row.measure_time || localJob.measure_time || "",
+                  windows: updatedWindows,
+                  synced: true,
+                };
               }
             }
           }
@@ -989,6 +1046,66 @@ export default function App() {
     }
   }, [jobs]);
 
+  // Auto-sync: debounce 3 seconds after any job becomes unsynced
+  const autoSyncTimer = useRef(null);
+  const prevJobsRef = useRef(jobs);
+
+  useEffect(() => {
+    // Find jobs that just became unsynced (weren't unsynced before)
+    const prevUnsynced = new Set(prevJobsRef.current.filter((j) => !j.synced).map((j) => j.id));
+    const newUnsynced = jobs.filter((j) => !j.synced && j.lead_id && !prevUnsynced.has(j.id));
+    const allUnsynced = jobs.filter((j) => !j.synced && j.lead_id);
+    prevJobsRef.current = jobs;
+
+    if (allUnsynced.length === 0) return;
+    if (!SUPABASE_URL || !SUPABASE_ANON_KEY) return;
+
+    clearTimeout(autoSyncTimer.current);
+    autoSyncTimer.current = setTimeout(async () => {
+      for (const job of allUnsynced) {
+        try {
+          const windowsSummary = job.windows.map((w) => ({
+            id: w.id,
+            label: w.label,
+            measurements: w.measurements,
+            comments: w.comments,
+            main_photo_url: w.main_photo_url || null,
+            extra_photo_urls: w.extra_photo_urls || [],
+          }));
+
+          const payload = {
+            id: job.id,
+            lead_id: job.lead_id || null,
+            measure_date: job.measure_date || null,
+            measure_time: job.measure_time || null,
+            windows: windowsSummary,
+            measurements_json: windowsSummary,
+            created_at: job.created_at,
+          };
+
+          const res = await fetch(`${SUPABASE_URL}/rest/v1/check_measures`, {
+            method: "POST",
+            headers: {
+              apikey: SUPABASE_ANON_KEY,
+              Authorization: `Bearer ${SUPABASE_ANON_KEY}`,
+              "Content-Type": "application/json",
+              Prefer: "return=representation,resolution=merge-duplicates",
+            },
+            body: JSON.stringify(payload),
+          });
+
+          if (res.ok) {
+            setJobs((prev) => prev.map((j) => (j.id === job.id ? { ...j, synced: true } : j)));
+          }
+        } catch (err) {
+          console.error("Auto-sync failed for job:", job.id, err);
+        }
+      }
+    }, 3000);
+
+    return () => clearTimeout(autoSyncTimer.current);
+  }, [jobs]);
+
   const showToast = useCallback((msg) => {
     setToast(msg);
     setTimeout(() => setToast(null), 2500);
@@ -996,6 +1113,21 @@ export default function App() {
 
   const currentJob = jobs.find((j) => j.id === currentJobId) || null;
   const currentWindow = currentJob?.windows?.[currentWindowIdx] || null;
+  const isHistory = currentJob && currentJob.status !== "In Progress";
+
+  // Split jobs into active and history
+  const activeJobs = jobs.filter((j) => !j.status || j.status === "In Progress");
+  const historyJobs = jobs.filter((j) => j.status && j.status !== "In Progress");
+
+  const getStatusPillClass = (status) => {
+    switch (status) {
+      case "Approved": return "pill-status-approved";
+      case "Rejected": return "pill-status-rejected";
+      case "Delayed": return "pill-status-delayed";
+      case "Uncontactable": return "pill-status-uncontactable";
+      default: return "pill-status-inprogress";
+    }
+  };
 
   // ---- Job CRUD ----
   const createJob = () => {
@@ -1008,6 +1140,7 @@ export default function App() {
       street: "",
       suburb: "",
       postcode: "",
+      status: "In Progress",
       measure_date: "",
       measure_time: "",
       windows: [],
@@ -1034,6 +1167,7 @@ export default function App() {
       street: lead.street || "",
       suburb: lead.suburb || "",
       postcode: lead.postcode || "",
+      status: lead.status || "In Progress",
     });
   };
 
@@ -1050,6 +1184,7 @@ export default function App() {
     suburb: "suburb",
     postcode: "postcode",
     measure_date: "cm_date",
+    status: "status",
   };
 
   // Debounce timer ref for lead updates
@@ -1288,39 +1423,87 @@ export default function App() {
                 </button>
               </div>
             </div>
+
+            {/* Tab Bar */}
+            <div className="tab-bar">
+              <button className={`tab-btn ${activeTab === "active" ? "active" : ""}`} onClick={() => setActiveTab("active")}>
+                Active ({activeJobs.length})
+              </button>
+              <button className={`tab-btn ${activeTab === "history" ? "active" : ""}`} onClick={() => setActiveTab("history")}>
+                History ({historyJobs.length})
+              </button>
+            </div>
+
             <div className="scroll-area">
-              {jobs.length === 0 ? (
-                <div className="empty-state">
-                  <div className="empty-icon"><Icons.Ruler size={48} /></div>
-                  <div className="empty-title">No Measure Jobs Yet</div>
-                  <div className="empty-desc">Tap the + button to create your first check measure job.</div>
-                </div>
-              ) : (
-                <div className="card" style={{ margin: "16px", borderRadius: "var(--radius)" }}>
-                  {jobs.map((job) => (
-                    <div className="job-item" key={job.id} onClick={() => goJob(job.id)}>
-                      <div className="job-avatar"><Icons.User size={20} /></div>
-                      <div className="job-info">
-                        <div className="job-name">{job.lead_name || "Untitled Lead"}</div>
-                        <div className="job-address">{[job.street, job.suburb, job.postcode].filter(Boolean).join(", ") || job.address || "No address"}</div>
-                        <div style={{ marginTop: 4 }}>
-                          {job.synced ? (
-                            <span className="pill pill-synced"><Icons.Check size={10} /> Synced</span>
-                          ) : (
-                            <span className="pill pill-local">Local only</span>
-                          )}
-                        </div>
-                      </div>
-                      <div className="job-meta">
-                        <div className="job-count">{job.windows.length} window{job.windows.length !== 1 ? "s" : ""}</div>
-                        <div className="job-date">{formatDate(job.created_at)}</div>
-                      </div>
+              {activeTab === "active" && (
+                <>
+                  {activeJobs.length === 0 ? (
+                    <div className="empty-state">
+                      <div className="empty-icon"><Icons.Ruler size={48} /></div>
+                      <div className="empty-title">No Active Jobs</div>
+                      <div className="empty-desc">Tap the + button to create a new check measure job.</div>
                     </div>
-                  ))}
-                </div>
+                  ) : (
+                    <div className="card" style={{ margin: "16px", borderRadius: "var(--radius)" }}>
+                      {activeJobs.map((job) => (
+                        <div className="job-item" key={job.id} onClick={() => goJob(job.id)}>
+                          <div className="job-avatar"><Icons.User size={20} /></div>
+                          <div className="job-info">
+                            <div className="job-name">{job.lead_name || "Untitled Lead"}</div>
+                            <div className="job-address">{[job.street, job.suburb, job.postcode].filter(Boolean).join(", ") || "No address"}</div>
+                            <div style={{ marginTop: 4, display: "flex", gap: 6 }}>
+                              {job.synced ? (
+                                <span className="pill pill-synced"><Icons.Check size={10} /> Synced</span>
+                              ) : (
+                                <span className="pill pill-local">Local only</span>
+                              )}
+                            </div>
+                          </div>
+                          <div className="job-meta">
+                            <div className="job-count">{job.windows.length} window{job.windows.length !== 1 ? "s" : ""}</div>
+                            <div className="job-date">{formatDate(job.created_at)}</div>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </>
+              )}
+
+              {activeTab === "history" && (
+                <>
+                  {historyJobs.length === 0 ? (
+                    <div className="empty-state">
+                      <div className="empty-icon"><Icons.List size={48} /></div>
+                      <div className="empty-title">No History Yet</div>
+                      <div className="empty-desc">Jobs with Approved, Rejected, or other non-active statuses will appear here.</div>
+                    </div>
+                  ) : (
+                    <div className="card" style={{ margin: "16px", borderRadius: "var(--radius)" }}>
+                      {historyJobs.map((job) => (
+                        <div className="job-item" key={job.id} onClick={() => goJob(job.id)}>
+                          <div className="job-avatar" style={{ background: "var(--warm-100)", color: "var(--warm-300)" }}><Icons.User size={20} /></div>
+                          <div className="job-info">
+                            <div className="job-name">{job.lead_name || "Untitled Lead"}</div>
+                            <div className="job-address">{[job.street, job.suburb, job.postcode].filter(Boolean).join(", ") || "No address"}</div>
+                            <div style={{ marginTop: 4 }}>
+                              <span className={`pill ${getStatusPillClass(job.status)}`}>{job.status}</span>
+                            </div>
+                          </div>
+                          <div className="job-meta">
+                            <div className="job-count">{job.windows.length} window{job.windows.length !== 1 ? "s" : ""}</div>
+                            <div className="job-date">{formatDate(job.created_at)}</div>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </>
               )}
             </div>
-            <button className="fab" onClick={createJob}><Icons.Plus size={24} /></button>
+            {activeTab === "active" && (
+              <button className="fab" onClick={createJob}><Icons.Plus size={24} /></button>
+            )}
           </>
         )}
 
@@ -1333,14 +1516,20 @@ export default function App() {
               </button>
               <div style={{ flex: 1 }} />
               <div className="header-actions">
-                {currentJob.synced ? (
-                  <span className="pill pill-synced"><Icons.Check size={12} /> Synced</span>
+                {isHistory ? (
+                  <span className={`pill ${getStatusPillClass(currentJob.status)}`}>{currentJob.status}</span>
                 ) : (
-                  <span className="pill pill-local">Local</span>
+                  <>
+                    {currentJob.synced ? (
+                      <span className="pill pill-synced"><Icons.Check size={12} /> Synced</span>
+                    ) : (
+                      <span className="pill pill-local">Local</span>
+                    )}
+                    <button className="btn btn-ghost" onClick={() => syncJob(currentJob.id)} title="Sync to Supabase">
+                      <Icons.Cloud size={18} />
+                    </button>
+                  </>
                 )}
-                <button className="btn btn-ghost" onClick={() => syncJob(currentJob.id)} title="Sync to Supabase">
-                  <Icons.Cloud size={18} />
-                </button>
               </div>
             </div>
             <div className="scroll-area">
@@ -1356,22 +1545,25 @@ export default function App() {
                           className="field-input"
                           style={{ flex: 1 }}
                           value={currentJob.lead_id || ""}
+                          disabled={isHistory}
                           onChange={(e) => {
                             if (e.target.value) selectLead(e.target.value);
                           }}
                         >
                           <option value="">— Choose a lead —</option>
-                          {leads.map((lead) => (
+                          {leads.filter((l) => l.status === "In Progress" || String(l.id) === String(currentJob.lead_id)).map((lead) => (
                             <option key={lead.id} value={lead.id}>{lead.name}</option>
                           ))}
                         </select>
-                        <button
-                          className="btn btn-primary"
-                          style={{ flexShrink: 0, padding: "10px 14px" }}
-                          onClick={() => setShowAddLead(true)}
-                        >
-                          <Icons.Plus size={16} />
-                        </button>
+                        {!currentJob.lead_id && !isHistory && (
+                          <button
+                            className="btn btn-primary"
+                            style={{ flexShrink: 0, padding: "10px 14px" }}
+                            onClick={() => setShowAddLead(true)}
+                          >
+                            <Icons.Plus size={16} />
+                          </button>
+                        )}
                       </div>
                     </div>
                     <div className="field">
@@ -1380,6 +1572,7 @@ export default function App() {
                         className="field-input"
                         placeholder="Auto-filled from lead"
                         value={currentJob.lead_name}
+                        disabled={isHistory}
                         onChange={(e) => updateLeadField(currentJob.id, "lead_name", e.target.value)}
                       />
                     </div>
@@ -1391,6 +1584,7 @@ export default function App() {
                           type="tel"
                           placeholder="Auto-filled"
                           value={currentJob.phone}
+                          disabled={isHistory}
                           onChange={(e) => updateLeadField(currentJob.id, "phone", e.target.value)}
                         />
                       </div>
@@ -1401,6 +1595,7 @@ export default function App() {
                           type="email"
                           placeholder="Auto-filled"
                           value={currentJob.email || ""}
+                          disabled={isHistory}
                           onChange={(e) => updateLeadField(currentJob.id, "email", e.target.value)}
                         />
                       </div>
@@ -1411,6 +1606,7 @@ export default function App() {
                         className="field-input"
                         placeholder="e.g. 42 Brunswick St"
                         value={currentJob.street || ""}
+                        disabled={isHistory}
                         onChange={(e) => updateLeadField(currentJob.id, "street", e.target.value)}
                       />
                     </div>
@@ -1421,6 +1617,7 @@ export default function App() {
                           className="field-input"
                           placeholder="e.g. Fitzroy"
                           value={currentJob.suburb || ""}
+                          disabled={isHistory}
                           onChange={(e) => updateLeadField(currentJob.id, "suburb", e.target.value)}
                         />
                       </div>
@@ -1430,9 +1627,23 @@ export default function App() {
                           className="field-input"
                           placeholder="3065"
                           value={currentJob.postcode || ""}
+                          disabled={isHistory}
                           onChange={(e) => updateLeadField(currentJob.id, "postcode", e.target.value)}
                         />
                       </div>
+                    </div>
+                    <div className="field">
+                      <label className="field-label">Status</label>
+                      <select
+                        className="field-input"
+                        value={currentJob.status || "In Progress"}
+                        disabled={isHistory}
+                        onChange={(e) => updateLeadField(currentJob.id, "status", e.target.value)}
+                      >
+                        {STATUS_OPTIONS.map((s) => (
+                          <option key={s} value={s}>{s}</option>
+                        ))}
+                      </select>
                     </div>
                     <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
                       <div className="field">
@@ -1441,6 +1652,7 @@ export default function App() {
                           className="field-input"
                           type="date"
                           value={currentJob.measure_date}
+                          disabled={isHistory}
                           onChange={(e) => updateLeadField(currentJob.id, "measure_date", e.target.value)}
                         />
                       </div>
@@ -1450,6 +1662,7 @@ export default function App() {
                           className="field-input"
                           type="time"
                           value={currentJob.measure_time}
+                          disabled={isHistory}
                           onChange={(e) => updateJob(currentJob.id, { measure_time: e.target.value })}
                         />
                       </div>
@@ -1496,9 +1709,11 @@ export default function App() {
                   </div>
                 )}
 
-                <button className="btn btn-secondary btn-block" onClick={addWindow}>
-                  <Icons.Plus size={16} /> Add Window
-                </button>
+                {!isHistory && (
+                  <button className="btn btn-secondary btn-block" onClick={addWindow}>
+                    <Icons.Plus size={16} /> Add Window
+                  </button>
+                )}
 
                 <div className="divider" />
 
@@ -1506,11 +1721,13 @@ export default function App() {
                   <Icons.Download size={16} /> Export PDF
                 </button>
 
-                <button className="btn btn-danger btn-block" style={{ marginTop: 8 }} onClick={() => {
-                  if (confirm("Delete this entire job?")) deleteJob(currentJob.id);
-                }}>
-                  <Icons.Trash size={16} /> Delete Job
-                </button>
+                {!isHistory && (
+                  <button className="btn btn-danger btn-block" style={{ marginTop: 8 }} onClick={() => {
+                    if (confirm("Delete this entire job?")) deleteJob(currentJob.id);
+                  }}>
+                    <Icons.Trash size={16} /> Delete Job
+                  </button>
+                )}
               </div>
             </div>
           </>
@@ -1526,6 +1743,7 @@ export default function App() {
             onBack={() => setScreen("job")}
             onUpdate={(updates) => updateWindow(currentWindowIdx, updates)}
             onDelete={() => deleteWindow(currentWindowIdx)}
+            readOnly={isHistory}
             onNext={() => {
               if (currentWindowIdx < currentJob.windows.length - 1) {
                 setCurrentWindowIdx(currentWindowIdx + 1);
@@ -1598,7 +1816,7 @@ export default function App() {
 // ============================================================
 // WINDOW DETAIL VIEW
 // ============================================================
-function WindowDetail({ job, window: win, windowIdx, totalWindows, onBack, onUpdate, onDelete, onNext, onPrev, showToast }) {
+function WindowDetail({ job, window: win, windowIdx, totalWindows, onBack, onUpdate, onDelete, readOnly, onNext, onPrev, showToast }) {
   const mainPhotoRef = useRef(null);
   const extraPhotoRef = useRef(null);
   const [drawingPhoto, setDrawingPhoto] = useState(null); // { src, target: 'main' | index }
@@ -1661,16 +1879,18 @@ function WindowDetail({ job, window: win, windowIdx, totalWindows, onBack, onUpd
               className="field-input"
               placeholder="e.g. Master Bedroom — North Wall"
               value={win.label}
+              disabled={readOnly}
               onChange={(e) => onUpdate({ label: e.target.value })}
             />
           </div>
 
           {/* Main Photo */}
           <div className="section-title" style={{ padding: "8px 0" }}>Window Photo</div>
-          <div className="photo-main" onClick={() => !win.main_photo && mainPhotoRef.current?.click()}>
+          <div className="photo-main" onClick={() => !readOnly && !win.main_photo && mainPhotoRef.current?.click()}>
             {win.main_photo ? (
               <>
                 <img src={win.main_photo} alt="Window" />
+                {!readOnly && (
                 <div style={{ position: "absolute", bottom: 8, right: 8, display: "flex", gap: 6, zIndex: 2 }}>
                   <button
                     className="btn btn-ghost"
@@ -1697,11 +1917,13 @@ function WindowDetail({ job, window: win, windowIdx, totalWindows, onBack, onUpd
                     <Icons.Trash size={14} /> Remove
                   </button>
                 </div>
+                )}
               </>
             ) : (
               <>
-                <Icons.Camera size={32} color="var(--warm-300)" />
-                <span className="photo-main-label">Tap to take or upload photo</span>
+                {!readOnly && <Icons.Camera size={32} color="var(--warm-300)" />}
+                {!readOnly && <span className="photo-main-label">Tap to take or upload photo</span>}
+                {readOnly && <span className="photo-main-label" style={{ color: "var(--warm-200)" }}>No photo</span>}
               </>
             )}
           </div>
@@ -1719,24 +1941,30 @@ function WindowDetail({ job, window: win, windowIdx, totalWindows, onBack, onUpd
             <div className="section-title" style={{ padding: "0 0 8px" }}>Additional Photos</div>
             <div className="photo-strip">
               {win.extra_photos.map((url, idx) => (
-                <div className="photo-thumb" key={idx} onClick={() => setDrawingPhoto({ src: url, target: idx })}>
+                <div className="photo-thumb" key={idx} onClick={() => !readOnly && setDrawingPhoto({ src: url, target: idx })}>
                   <img src={url} alt="" />
-                  <div className="photo-thumb-remove" onClick={(e) => { e.stopPropagation(); if (confirm("Remove this photo?")) removeExtraPhoto(idx); }}>×</div>
+                  {!readOnly && (
+                    <div className="photo-thumb-remove" onClick={(e) => { e.stopPropagation(); if (confirm("Remove this photo?")) removeExtraPhoto(idx); }}>×</div>
+                  )}
                 </div>
               ))}
-              <div className="photo-add-small" onClick={() => extraPhotoRef.current?.click()}>
-                <Icons.Plus size={20} color="var(--warm-300)" />
-              </div>
+              {!readOnly && (
+                <div className="photo-add-small" onClick={() => extraPhotoRef.current?.click()}>
+                  <Icons.Plus size={20} color="var(--warm-300)" />
+                </div>
+              )}
             </div>
-            <input
-              ref={extraPhotoRef}
-              type="file"
-              accept="image/*"
-              capture="environment"
-              multiple
-              style={{ display: "none" }}
-              onChange={handleExtraPhotos}
-            />
+            {!readOnly && (
+              <input
+                ref={extraPhotoRef}
+                type="file"
+                accept="image/*"
+                capture="environment"
+                multiple
+                style={{ display: "none" }}
+                onChange={handleExtraPhotos}
+              />
+            )}
           </div>
 
           {/* Measurements */}
@@ -1758,6 +1986,7 @@ function WindowDetail({ job, window: win, windowIdx, totalWindows, onBack, onUpd
                       inputMode="decimal"
                       placeholder="0"
                       value={win.measurements[f.key]}
+                      disabled={readOnly}
                       onChange={(e) => updateMeas(f.key, e.target.value)}
                     />
                     <span className="meas-unit">mm</span>
@@ -1785,6 +2014,7 @@ function WindowDetail({ job, window: win, windowIdx, totalWindows, onBack, onUpd
                       inputMode="decimal"
                       placeholder="0"
                       value={win.measurements[f.key]}
+                      disabled={readOnly}
                       onChange={(e) => updateMeas(f.key, e.target.value)}
                     />
                     <span className="meas-unit">mm</span>
@@ -1812,6 +2042,7 @@ function WindowDetail({ job, window: win, windowIdx, totalWindows, onBack, onUpd
                       inputMode="decimal"
                       placeholder="0"
                       value={win.measurements[f.key]}
+                      disabled={readOnly}
                       onChange={(e) => updateMeas(f.key, e.target.value)}
                     />
                     <span className="meas-unit">mm</span>
@@ -1829,19 +2060,23 @@ function WindowDetail({ job, window: win, windowIdx, totalWindows, onBack, onUpd
                 className="field-input"
                 placeholder="Describe the window, note any issues, obstructions, special requirements..."
                 value={win.comments}
+                disabled={readOnly}
                 onChange={(e) => onUpdate({ comments: e.target.value })}
                 rows={4}
               />
             </div>
           </div>
 
-          <div className="divider" />
-
-          <button className="btn btn-danger btn-block" onClick={() => {
-            if (confirm("Remove this window?")) onDelete();
-          }}>
-            <Icons.Trash size={16} /> Remove Window
-          </button>
+          {!readOnly && (
+            <>
+              <div className="divider" />
+              <button className="btn btn-danger btn-block" onClick={() => {
+                if (confirm("Remove this window?")) onDelete();
+              }}>
+                <Icons.Trash size={16} /> Remove Window
+              </button>
+            </>
+          )}
         </div>
       </div>
 

@@ -538,8 +538,7 @@ const MEASUREMENT_FIELDS = [
   { key: "treatment_drop", label: "Treatment Drop" },
   { key: "left_wall_to_arch", label: "Left Wall → Architrave" },
   { key: "right_wall_to_arch", label: "Right Wall → Architrave" },
-  { key: "arch_to_ceiling", label: "Architrave → Ceiling" },
-  { key: "arch_to_floor", label: "Architrave → Floor" },
+  { key: "to_floor", label: "Architrave → Floor" }, // label changes based on cornices
 ];
 
 const BAY_MEASUREMENT_FIELDS = [
@@ -552,6 +551,13 @@ const BAY_MEASUREMENT_FIELDS = [
   { key: "bay_bulkhead_width", label: "Bulkhead Width" },
   { key: "bay_bulkhead_height", label: "Bulkhead Height" },
   { key: "bay_bulkhead_depth", label: "Bulkhead Depth" },
+];
+
+// Helper to get the surrounds fields with dynamic label based on cornices
+const getSurroundsFields = (hasCornices) => [
+  { key: "left_wall_to_arch", label: "Left Wall → Architrave" },
+  { key: "right_wall_to_arch", label: "Right Wall → Architrave" },
+  { key: "to_floor", label: hasCornices ? "Cornice → Floor" : "Ceiling → Floor" },
 ];
 
 const ALL_MEAS_KEYS = [...MEASUREMENT_FIELDS, ...BAY_MEASUREMENT_FIELDS].map((f) => f.key);
@@ -785,16 +791,7 @@ const exportJobPDF = async (job, showToast) => {
       const bayTag = w.is_bay ? " (Bay)" : "";
       doc.text(`Window ${wIdx + 1}: ${w.label || ""}${bayTag}`, mx, y + 6);
 
-      // Main photo
-      const photoSrc = w.main_photo || w.main_photo_url;
-      let photoEndX = mx;
-      if (photoSrc) {
-        const result = await renderPhoto(photoSrc, y + 9);
-        photoEndX = result.endX;
-      }
-
-      // Measurements table beside photo - conditional on bay window
-      const measX = Math.max(photoEndX, mx + 74);
+      // Measurements table fields - conditional on bay window
       const isBay = w.is_bay;
       const measFields = isBay ? [
         ["Left Height", w.measurements?.bay_left_height],
@@ -808,8 +805,7 @@ const exportJobPDF = async (job, showToast) => {
         ["Bulkhead Depth", w.measurements?.bay_bulkhead_depth],
         ["L Wall to Arch.", w.measurements?.left_wall_to_arch],
         ["R Wall to Arch.", w.measurements?.right_wall_to_arch],
-        ["Arch. to Ceiling", w.measurements?.arch_to_ceiling],
-        ["Arch. to Floor", w.measurements?.arch_to_floor],
+        [w.has_cornices ? "Cornice to Floor" : "Ceiling to Floor", w.measurements?.to_floor],
       ] : [
         ["Inside Width", w.measurements?.inside_width],
         ["Outside Width", w.measurements?.outside_width],
@@ -819,11 +815,46 @@ const exportJobPDF = async (job, showToast) => {
         ["Treatment Drop", w.measurements?.treatment_drop],
         ["L Wall to Arch.", w.measurements?.left_wall_to_arch],
         ["R Wall to Arch.", w.measurements?.right_wall_to_arch],
-        ["Arch. to Ceiling", w.measurements?.arch_to_ceiling],
-        ["Arch. to Floor", w.measurements?.arch_to_floor],
+        [w.has_cornices ? "Cornice to Floor" : "Ceiling to Floor", w.measurements?.to_floor],
       ];
 
-      let my = y + 9;
+      // Window info badges - prominent display
+      let badgeY = y + 10;
+      const badges = [];
+      if (w.control_side) badges.push({ label: "CONTROL SIDE", value: w.control_side.charAt(0).toUpperCase() + w.control_side.slice(1), color: [37, 99, 235], bg: [239, 246, 255] });
+      if (w.has_cornices) badges.push({ label: "CORNICES", value: "Yes", color: [141, 199, 63], bg: [242, 249, 231] });
+      if (!w.has_cornices) badges.push({ label: "CORNICES", value: "No", color: [148, 163, 184], bg: [241, 245, 249] });
+      if (w.is_bay) badges.push({ label: "TYPE", value: "Bay Window", color: [180, 83, 9], bg: [255, 247, 237] });
+
+      if (badges.length > 0) {
+        let bx = mx;
+        badges.forEach((b) => {
+          const boxW = 38;
+          doc.setFillColor(...b.bg);
+          doc.roundedRect(bx, badgeY, boxW, 14, 2, 2, "F");
+          doc.setFontSize(6);
+          doc.setFont("helvetica", "bold");
+          doc.setTextColor(...b.color);
+          doc.text(b.label, bx + boxW / 2, badgeY + 5, { align: "center" });
+          doc.setFontSize(9);
+          doc.setTextColor(15, 23, 42);
+          doc.text(b.value, bx + boxW / 2, badgeY + 11, { align: "center" });
+          bx += boxW + 4;
+        });
+        badgeY += 18;
+      }
+
+      // Main photo
+      const photoSrc = w.main_photo || w.main_photo_url;
+      let photoEndX = mx;
+      if (photoSrc) {
+        const result = await renderPhoto(photoSrc, badgeY);
+        photoEndX = result.endX;
+      }
+
+      // Measurements table beside photo
+      const measX = Math.max(photoEndX, mx + 74);
+      let my = badgeY;
       doc.setFillColor(28, 46, 15);
       doc.rect(measX, my, mxr - measX, 6, "F");
       doc.setTextColor(255, 255, 255);
@@ -848,7 +879,9 @@ const exportJobPDF = async (job, showToast) => {
       });
 
       // Comments
-      let contentY = y + 9 + Math.max(52, 56) + 4;
+      const photoHeight = photoSrc ? 52 : 0;
+      const measHeight = 6 + measFields.length * 5;
+      let contentY = badgeY + Math.max(photoHeight, measHeight) + 4;
       if (w.comments) {
         doc.setFillColor(242, 249, 231);
         doc.roundedRect(mx, contentY, cw, 14, 2, 2, "F");
@@ -1372,6 +1405,8 @@ export default function App() {
       id: genId(),
       label: `Window ${j.windows.length + 1}`,
       is_bay: false,
+      control_side: "",
+      has_cornices: false,
       main_photo: null,
       extra_photos: [],
       measurements: blankMeasurements(),
@@ -2151,10 +2186,57 @@ function WindowDetail({ job, window: win, windowIdx, totalWindows, onBack, onUpd
             )}
           </div>
 
-          {/* Window Type */}
-          <div className="section-title" style={{ padding: "0 0 8px", marginTop: 16 }}>Window Type</div>
+          {/* Window Information */}
+          <div className="section-title" style={{ padding: "0 0 8px", marginTop: 16 }}>Window Information</div>
           <div className="card mb-16">
             <div className="card-body">
+              {/* Control Side */}
+              <div style={{ marginBottom: 16 }}>
+                <span className="field-label">Control Side</span>
+                <div style={{ display: "flex", gap: 8, marginTop: 4 }}>
+                  {["Left", "Right"].map((side) => (
+                    <button
+                      key={side}
+                      disabled={readOnly}
+                      onClick={() => onUpdate({ control_side: side.toLowerCase() })}
+                      className="btn"
+                      style={{
+                        flex: 1,
+                        background: win.control_side === side.toLowerCase() ? "var(--accent)" : "var(--warm-100)",
+                        color: win.control_side === side.toLowerCase() ? "#fff" : "var(--ink)",
+                        border: `1.5px solid ${win.control_side === side.toLowerCase() ? "var(--accent)" : "var(--warm-200)"}`,
+                        opacity: readOnly ? 0.8 : 1,
+                        cursor: readOnly ? "not-allowed" : "pointer",
+                      }}
+                    >
+                      {side}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {/* Cornices */}
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 16 }}>
+                <span style={{ fontSize: 14, fontWeight: 500 }}>Cornices</span>
+                <button
+                  disabled={readOnly}
+                  onClick={() => onUpdate({ has_cornices: !win.has_cornices })}
+                  style={{
+                    width: 48, height: 28, borderRadius: 14, border: "none", cursor: readOnly ? "not-allowed" : "pointer",
+                    background: win.has_cornices ? "var(--accent)" : "var(--warm-200)",
+                    position: "relative", transition: "background 0.2s",
+                  }}
+                >
+                  <div style={{
+                    width: 22, height: 22, borderRadius: 11, background: "#fff",
+                    position: "absolute", top: 3,
+                    left: win.has_cornices ? 23 : 3,
+                    transition: "left 0.2s", boxShadow: "0 1px 3px rgba(0,0,0,0.2)",
+                  }} />
+                </button>
+              </div>
+
+              {/* Bay Window */}
               <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
                 <span style={{ fontSize: 14, fontWeight: 500 }}>Bay Window</span>
                 <button
@@ -2211,13 +2293,13 @@ function WindowDetail({ job, window: win, windowIdx, totalWindows, onBack, onUpd
               <div className="meas-section-header">
                 <div className="meas-section-dot" style={{ background: "var(--success)" }} />
                 <span style={{ fontSize: 11, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.08em", color: "var(--success)" }}>
-                  Architrave & Surrounds
+                  Surrounds
                 </span>
               </div>
               <div className="card mb-16">
                 <div className="card-body">
                   <div className="meas-grid">
-                    {MEASUREMENT_FIELDS.slice(6).map((f) => (
+                    {getSurroundsFields(win.has_cornices).map((f) => (
                       <div className="meas-item" key={f.key}>
                         <span className="meas-label">{f.label}</span>
                         <input
@@ -2225,7 +2307,7 @@ function WindowDetail({ job, window: win, windowIdx, totalWindows, onBack, onUpd
                           type="number"
                           inputMode="decimal"
                           placeholder="0"
-                          value={win.measurements[f.key]}
+                          value={win.measurements[f.key] || ""}
                           disabled={readOnly}
                           onChange={(e) => updateMeas(f.key, e.target.value)}
                         />
@@ -2297,13 +2379,13 @@ function WindowDetail({ job, window: win, windowIdx, totalWindows, onBack, onUpd
               <div className="meas-section-header">
                 <div className="meas-section-dot" style={{ background: "var(--success)" }} />
                 <span style={{ fontSize: 11, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.08em", color: "var(--success)" }}>
-                  Architrave & Surrounds
+                  Surrounds
                 </span>
               </div>
               <div className="card mb-16">
                 <div className="card-body">
                   <div className="meas-grid">
-                    {MEASUREMENT_FIELDS.slice(6).map((f) => (
+                    {getSurroundsFields(win.has_cornices).map((f) => (
                       <div className="meas-item" key={f.key}>
                         <span className="meas-label">{f.label}</span>
                         <input
@@ -2311,7 +2393,7 @@ function WindowDetail({ job, window: win, windowIdx, totalWindows, onBack, onUpd
                           type="number"
                           inputMode="decimal"
                           placeholder="0"
-                          value={win.measurements[f.key]}
+                          value={win.measurements[f.key] || ""}
                           disabled={readOnly}
                           onChange={(e) => updateMeas(f.key, e.target.value)}
                         />

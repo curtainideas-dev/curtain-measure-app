@@ -203,7 +203,7 @@ textarea.field-input { resize: vertical; min-height: 80px; line-height: 1.5; }
   display: block; line-height: 1.2;
 }
 .meas-input {
-  width: 100%; padding: 8px 10px; border: 1.5px solid var(--warm-200);
+  width: 100%; padding: 8px 32px 8px 10px; border: 1.5px solid var(--warm-200);
   border-radius: 6px; font-size: 16px; font-weight: 500;
   text-align: right; background: #fff; color: var(--ink);
   transition: border-color 0.2s;
@@ -542,7 +542,20 @@ const MEASUREMENT_FIELDS = [
   { key: "arch_to_floor", label: "Architrave → Floor" },
 ];
 
-const blankMeasurements = () => MEASUREMENT_FIELDS.reduce((o, f) => ({ ...o, [f.key]: "" }), {});
+const BAY_MEASUREMENT_FIELDS = [
+  { key: "bay_left_height", label: "Left Height" },
+  { key: "bay_left_width", label: "Left Width" },
+  { key: "bay_middle_height", label: "Middle Height" },
+  { key: "bay_middle_width", label: "Middle Width" },
+  { key: "bay_right_height", label: "Right Height" },
+  { key: "bay_right_width", label: "Right Width" },
+  { key: "bay_bulkhead_width", label: "Bulkhead Width" },
+  { key: "bay_bulkhead_height", label: "Bulkhead Height" },
+  { key: "bay_bulkhead_depth", label: "Bulkhead Depth" },
+];
+
+const ALL_MEAS_KEYS = [...MEASUREMENT_FIELDS, ...BAY_MEASUREMENT_FIELDS].map((f) => f.key);
+const blankMeasurements = () => ALL_MEAS_KEYS.reduce((o, k) => ({ ...o, [k]: "" }), {});
 
 const readFileAsDataURL = (file) => new Promise((resolve) => {
   const r = new FileReader();
@@ -717,7 +730,8 @@ const exportJobPDF = async (job, showToast) => {
       doc.rect(mx, y, cw, 6, "F");
       doc.setFontSize(7);
       doc.text(`${i + 1}`, mx + 2, y + 4.5);
-      doc.text((w.label || "—").substring(0, 20), mx + 9, y + 4.5);
+      const labelText = (w.label || "—").substring(0, 18) + (w.is_bay ? " (Bay)" : "");
+      doc.text(labelText, mx + 9, y + 4.5);
       doc.text(w.measurements?.inside_width || "—", mx + 52, y + 4.5);
       doc.text(w.measurements?.inside_length || "—", mx + 68, y + 4.5);
       doc.text(w.measurements?.outside_width || "—", mx + 84, y + 4.5);
@@ -768,7 +782,8 @@ const exportJobPDF = async (job, showToast) => {
       doc.setFontSize(12);
       doc.setFont("helvetica", "bold");
       doc.setTextColor(28, 46, 15);
-      doc.text(`Window ${wIdx + 1}: ${w.label || ""}`, mx, y + 6);
+      const bayTag = w.is_bay ? " (Bay)" : "";
+      doc.text(`Window ${wIdx + 1}: ${w.label || ""}${bayTag}`, mx, y + 6);
 
       // Main photo
       const photoSrc = w.main_photo || w.main_photo_url;
@@ -778,9 +793,24 @@ const exportJobPDF = async (job, showToast) => {
         photoEndX = result.endX;
       }
 
-      // Measurements table beside photo
+      // Measurements table beside photo - conditional on bay window
       const measX = Math.max(photoEndX, mx + 74);
-      const measFields = [
+      const isBay = w.is_bay;
+      const measFields = isBay ? [
+        ["Left Height", w.measurements?.bay_left_height],
+        ["Left Width", w.measurements?.bay_left_width],
+        ["Middle Height", w.measurements?.bay_middle_height],
+        ["Middle Width", w.measurements?.bay_middle_width],
+        ["Right Height", w.measurements?.bay_right_height],
+        ["Right Width", w.measurements?.bay_right_width],
+        ["Bulkhead Width", w.measurements?.bay_bulkhead_width],
+        ["Bulkhead Height", w.measurements?.bay_bulkhead_height],
+        ["Bulkhead Depth", w.measurements?.bay_bulkhead_depth],
+        ["L Wall to Arch.", w.measurements?.left_wall_to_arch],
+        ["R Wall to Arch.", w.measurements?.right_wall_to_arch],
+        ["Arch. to Ceiling", w.measurements?.arch_to_ceiling],
+        ["Arch. to Floor", w.measurements?.arch_to_floor],
+      ] : [
         ["Inside Width", w.measurements?.inside_width],
         ["Outside Width", w.measurements?.outside_width],
         ["Inside Length", w.measurements?.inside_length],
@@ -986,6 +1016,7 @@ export default function App() {
             return {
               id: rw.id || genId(),
               label: rw.label || "Window",
+              is_bay: rw.is_bay ?? lw?.is_bay ?? false,
               main_photo: mainPhoto,
               main_photo_url: cloudMain,
               extra_photos: mergedExtras,
@@ -1086,12 +1117,14 @@ export default function App() {
     const allUnsynced = jobs.filter((j) => !j.synced);
     prevJobsRef.current = jobs;
 
-    if (allUnsynced.length === 0) return;
+    if (allUnsynced.length === 0) { isSyncing.current = false; return; }
     if (!SUPABASE_URL || !SUPABASE_ANON_KEY) return;
+
+    // Lock immediately to prevent poll from overwriting during the 3-second wait
+    isSyncing.current = true;
 
     clearTimeout(autoSyncTimer.current);
     autoSyncTimer.current = setTimeout(async () => {
-      isSyncing.current = true;
       for (const job of allUnsynced) {
         try {
           // Upload any base64 photos to Supabase Storage
@@ -1127,6 +1160,7 @@ export default function App() {
             windowsSummary.push({
               id: w.id,
               label: w.label,
+              is_bay: w.is_bay || false,
               measurements: w.measurements,
               comments: w.comments,
               main_photo_url: mainPhotoUrl,
@@ -1182,6 +1216,13 @@ export default function App() {
 
     return () => clearTimeout(autoSyncTimer.current);
   }, [jobs]);
+
+  // Scroll to top on screen change
+  useEffect(() => {
+    const scrollArea = document.querySelector(".scroll-area");
+    if (scrollArea) scrollArea.scrollTop = 0;
+    window.scrollTo(0, 0);
+  }, [screen, currentWindowIdx]);
 
   const showToast = useCallback((msg) => {
     setToast(msg);
@@ -1330,6 +1371,7 @@ export default function App() {
     const newWin = {
       id: genId(),
       label: `Window ${j.windows.length + 1}`,
+      is_bay: false,
       main_photo: null,
       extra_photos: [],
       measurements: blankMeasurements(),
@@ -1447,6 +1489,7 @@ export default function App() {
         windowsSummary.push({
           id: w.id,
           label: w.label,
+          is_bay: w.is_bay || false,
           measurements: w.measurements,
           comments: w.comments,
           main_photo_url: mainPhotoUrl,
@@ -1944,8 +1987,14 @@ export default function App() {
 function WindowDetail({ job, window: win, windowIdx, totalWindows, onBack, onUpdate, onDelete, onDeletePhoto, readOnly, onNext, onPrev, showToast }) {
   const mainPhotoRef = useRef(null);
   const extraPhotoRef = useRef(null);
+  const scrollRef = useRef(null);
   const [drawingPhoto, setDrawingPhoto] = useState(null);
-  const [confirmDelete, setConfirmDelete] = useState(null); // null | "main" | index number // { src, target: 'main' | index }
+  const [confirmDelete, setConfirmDelete] = useState(null);
+
+  // Scroll to top when entering window or switching windows
+  useEffect(() => {
+    scrollRef.current?.scrollTo(0, 0);
+  }, [windowIdx]);
 
   const handleMainPhoto = async (e) => {
     const file = e.target.files?.[0];
@@ -2005,7 +2054,7 @@ function WindowDetail({ job, window: win, windowIdx, totalWindows, onBack, onUpd
         </div>
       </div>
 
-      <div className="scroll-area">
+      <div className="scroll-area" ref={scrollRef}>
         <div className="p-16">
           {/* Window Label */}
           <div className="field">
@@ -2102,90 +2151,178 @@ function WindowDetail({ job, window: win, windowIdx, totalWindows, onBack, onUpd
             )}
           </div>
 
+          {/* Window Type */}
+          <div className="section-title" style={{ padding: "0 0 8px", marginTop: 16 }}>Window Type</div>
+          <div className="card mb-16">
+            <div className="card-body">
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+                <span style={{ fontSize: 14, fontWeight: 500 }}>Bay Window</span>
+                <button
+                  disabled={readOnly}
+                  onClick={() => onUpdate({ is_bay: !win.is_bay })}
+                  style={{
+                    width: 48, height: 28, borderRadius: 14, border: "none", cursor: readOnly ? "not-allowed" : "pointer",
+                    background: win.is_bay ? "var(--accent)" : "var(--warm-200)",
+                    position: "relative", transition: "background 0.2s",
+                  }}
+                >
+                  <div style={{
+                    width: 22, height: 22, borderRadius: 11, background: "#fff",
+                    position: "absolute", top: 3,
+                    left: win.is_bay ? 23 : 3,
+                    transition: "left 0.2s", boxShadow: "0 1px 3px rgba(0,0,0,0.2)",
+                  }} />
+                </button>
+              </div>
+            </div>
+          </div>
+
           {/* Measurements */}
-          <div className="meas-section-header">
-            <div className="meas-section-dot" style={{ background: "var(--blue)" }} />
-            <span style={{ fontSize: 11, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.08em", color: "var(--blue)" }}>
-              Window Measurements
-            </span>
-          </div>
-          <div className="card mb-16">
-            <div className="card-body">
-              <div className="meas-grid">
-                {MEASUREMENT_FIELDS.slice(0, 4).map((f) => (
-                  <div className="meas-item" key={f.key}>
-                    <span className="meas-label">{f.label}</span>
-                    <input
-                      className="meas-input"
-                      type="number"
-                      inputMode="decimal"
-                      placeholder="0"
-                      value={win.measurements[f.key]}
-                      disabled={readOnly}
-                      onChange={(e) => updateMeas(f.key, e.target.value)}
-                    />
-                    <span className="meas-unit">mm</span>
-                  </div>
-                ))}
+          {win.is_bay ? (
+            <>
+              <div className="meas-section-header">
+                <div className="meas-section-dot" style={{ background: "var(--blue)" }} />
+                <span style={{ fontSize: 11, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.08em", color: "var(--blue)" }}>
+                  Bay Window Measurements
+                </span>
               </div>
-            </div>
-          </div>
+              <div className="card mb-16">
+                <div className="card-body">
+                  <div className="meas-grid">
+                    {BAY_MEASUREMENT_FIELDS.map((f) => (
+                      <div className="meas-item" key={f.key}>
+                        <span className="meas-label">{f.label}</span>
+                        <input
+                          className="meas-input"
+                          type="number"
+                          inputMode="decimal"
+                          placeholder="0"
+                          value={win.measurements[f.key] || ""}
+                          disabled={readOnly}
+                          onChange={(e) => updateMeas(f.key, e.target.value)}
+                        />
+                        <span className="meas-unit">mm</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              </div>
 
-          <div className="meas-section-header">
-            <div className="meas-section-dot" style={{ background: "var(--accent)" }} />
-            <span style={{ fontSize: 11, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.08em", color: "var(--accent)" }}>
-              Treatment Dimensions
-            </span>
-          </div>
-          <div className="card mb-16">
-            <div className="card-body">
-              <div className="meas-grid">
-                {MEASUREMENT_FIELDS.slice(4, 6).map((f) => (
-                  <div className="meas-item" key={f.key}>
-                    <span className="meas-label">{f.label}</span>
-                    <input
-                      className="meas-input"
-                      type="number"
-                      inputMode="decimal"
-                      placeholder="0"
-                      value={win.measurements[f.key]}
-                      disabled={readOnly}
-                      onChange={(e) => updateMeas(f.key, e.target.value)}
-                    />
-                    <span className="meas-unit">mm</span>
-                  </div>
-                ))}
+              <div className="meas-section-header">
+                <div className="meas-section-dot" style={{ background: "var(--success)" }} />
+                <span style={{ fontSize: 11, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.08em", color: "var(--success)" }}>
+                  Architrave & Surrounds
+                </span>
               </div>
-            </div>
-          </div>
+              <div className="card mb-16">
+                <div className="card-body">
+                  <div className="meas-grid">
+                    {MEASUREMENT_FIELDS.slice(6).map((f) => (
+                      <div className="meas-item" key={f.key}>
+                        <span className="meas-label">{f.label}</span>
+                        <input
+                          className="meas-input"
+                          type="number"
+                          inputMode="decimal"
+                          placeholder="0"
+                          value={win.measurements[f.key]}
+                          disabled={readOnly}
+                          onChange={(e) => updateMeas(f.key, e.target.value)}
+                        />
+                        <span className="meas-unit">mm</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              </div>
+            </>
+          ) : (
+            <>
+              <div className="meas-section-header">
+                <div className="meas-section-dot" style={{ background: "var(--blue)" }} />
+                <span style={{ fontSize: 11, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.08em", color: "var(--blue)" }}>
+                  Window Measurements
+                </span>
+              </div>
+              <div className="card mb-16">
+                <div className="card-body">
+                  <div className="meas-grid">
+                    {MEASUREMENT_FIELDS.slice(0, 4).map((f) => (
+                      <div className="meas-item" key={f.key}>
+                        <span className="meas-label">{f.label}</span>
+                        <input
+                          className="meas-input"
+                          type="number"
+                          inputMode="decimal"
+                          placeholder="0"
+                          value={win.measurements[f.key]}
+                          disabled={readOnly}
+                          onChange={(e) => updateMeas(f.key, e.target.value)}
+                        />
+                        <span className="meas-unit">mm</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              </div>
 
-          <div className="meas-section-header">
-            <div className="meas-section-dot" style={{ background: "var(--success)" }} />
-            <span style={{ fontSize: 11, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.08em", color: "var(--success)" }}>
-              Architrave & Surrounds
-            </span>
-          </div>
-          <div className="card mb-16">
-            <div className="card-body">
-              <div className="meas-grid">
-                {MEASUREMENT_FIELDS.slice(6).map((f) => (
-                  <div className="meas-item" key={f.key}>
-                    <span className="meas-label">{f.label}</span>
-                    <input
-                      className="meas-input"
-                      type="number"
-                      inputMode="decimal"
-                      placeholder="0"
-                      value={win.measurements[f.key]}
-                      disabled={readOnly}
-                      onChange={(e) => updateMeas(f.key, e.target.value)}
-                    />
-                    <span className="meas-unit">mm</span>
-                  </div>
-                ))}
+              <div className="meas-section-header">
+                <div className="meas-section-dot" style={{ background: "var(--accent)" }} />
+                <span style={{ fontSize: 11, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.08em", color: "var(--accent)" }}>
+                  Treatment Dimensions
+                </span>
               </div>
-            </div>
-          </div>
+              <div className="card mb-16">
+                <div className="card-body">
+                  <div className="meas-grid">
+                    {MEASUREMENT_FIELDS.slice(4, 6).map((f) => (
+                      <div className="meas-item" key={f.key}>
+                        <span className="meas-label">{f.label}</span>
+                        <input
+                          className="meas-input"
+                          type="number"
+                          inputMode="decimal"
+                          placeholder="0"
+                          value={win.measurements[f.key]}
+                          disabled={readOnly}
+                          onChange={(e) => updateMeas(f.key, e.target.value)}
+                        />
+                        <span className="meas-unit">mm</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              </div>
+
+              <div className="meas-section-header">
+                <div className="meas-section-dot" style={{ background: "var(--success)" }} />
+                <span style={{ fontSize: 11, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.08em", color: "var(--success)" }}>
+                  Architrave & Surrounds
+                </span>
+              </div>
+              <div className="card mb-16">
+                <div className="card-body">
+                  <div className="meas-grid">
+                    {MEASUREMENT_FIELDS.slice(6).map((f) => (
+                      <div className="meas-item" key={f.key}>
+                        <span className="meas-label">{f.label}</span>
+                        <input
+                          className="meas-input"
+                          type="number"
+                          inputMode="decimal"
+                          placeholder="0"
+                          value={win.measurements[f.key]}
+                          disabled={readOnly}
+                          onChange={(e) => updateMeas(f.key, e.target.value)}
+                        />
+                        <span className="meas-unit">mm</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              </div>
+            </>
+          )}
 
           {/* Comments */}
           <div className="section-title" style={{ padding: "0 0 8px" }}>Comments & Notes</div>

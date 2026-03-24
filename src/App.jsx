@@ -557,11 +557,12 @@ const BAY_MEASUREMENT_FIELDS = [
 const getSurroundsFields = (hasCornices) => [
   { key: "left_wall_to_arch", label: "Left Wall → Architrave" },
   { key: "right_wall_to_arch", label: "Right Wall → Architrave" },
+  { key: "arch_to_floor", label: "Architrave → Floor" },
   { key: "to_floor", label: hasCornices ? "Cornice → Floor" : "Ceiling → Floor" },
 ];
 
 const SLIDING_MEAS_KEYS = ["sliding_height", "sliding_panel_1_width", "sliding_panel_2_width", "sliding_panel_3_width", "sliding_panel_4_width"];
-const ALL_MEAS_KEYS = [...MEASUREMENT_FIELDS, ...BAY_MEASUREMENT_FIELDS].map((f) => f.key).concat(SLIDING_MEAS_KEYS);
+const ALL_MEAS_KEYS = [...MEASUREMENT_FIELDS, ...BAY_MEASUREMENT_FIELDS].map((f) => f.key).concat(SLIDING_MEAS_KEYS, ["arch_to_floor"]);
 const blankMeasurements = () => ALL_MEAS_KEYS.reduce((o, k) => ({ ...o, [k]: "" }), {});
 
 const readFileAsDataURL = (file) => new Promise((resolve) => {
@@ -806,6 +807,7 @@ const exportJobPDF = async (job, showToast) => {
         ["Bulkhead Depth", w.measurements?.bay_bulkhead_depth],
         ["L Wall to Arch.", w.measurements?.left_wall_to_arch],
         ["R Wall to Arch.", w.measurements?.right_wall_to_arch],
+        ["Arch. to Floor", w.measurements?.arch_to_floor],
         [w.has_cornices ? "Cornice to Floor" : "Ceiling to Floor", w.measurements?.to_floor],
       ] : w.sliding_door ? (() => {
         const numPanels = parseInt(w.sliding_panels) || 0;
@@ -819,6 +821,7 @@ const exportJobPDF = async (job, showToast) => {
           ["Treatment Drop", w.measurements?.treatment_drop],
           ["L Wall to Arch.", w.measurements?.left_wall_to_arch],
           ["R Wall to Arch.", w.measurements?.right_wall_to_arch],
+          ["Arch. to Floor", w.measurements?.arch_to_floor],
           [w.has_cornices ? "Cornice to Floor" : "Ceiling to Floor", w.measurements?.to_floor],
         );
         return fields;
@@ -831,6 +834,7 @@ const exportJobPDF = async (job, showToast) => {
         ["Treatment Drop", w.measurements?.treatment_drop],
         ["L Wall to Arch.", w.measurements?.left_wall_to_arch],
         ["R Wall to Arch.", w.measurements?.right_wall_to_arch],
+        ["Arch. to Floor", w.measurements?.arch_to_floor],
         [w.has_cornices ? "Cornice to Floor" : "Ceiling to Floor", w.measurements?.to_floor],
       ];
 

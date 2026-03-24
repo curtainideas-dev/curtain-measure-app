@@ -560,7 +560,8 @@ const getSurroundsFields = (hasCornices) => [
   { key: "to_floor", label: hasCornices ? "Cornice → Floor" : "Ceiling → Floor" },
 ];
 
-const ALL_MEAS_KEYS = [...MEASUREMENT_FIELDS, ...BAY_MEASUREMENT_FIELDS].map((f) => f.key);
+const SLIDING_MEAS_KEYS = ["sliding_height", "sliding_panel_1_width", "sliding_panel_2_width", "sliding_panel_3_width", "sliding_panel_4_width"];
+const ALL_MEAS_KEYS = [...MEASUREMENT_FIELDS, ...BAY_MEASUREMENT_FIELDS].map((f) => f.key).concat(SLIDING_MEAS_KEYS);
 const blankMeasurements = () => ALL_MEAS_KEYS.reduce((o, k) => ({ ...o, [k]: "" }), {});
 
 const readFileAsDataURL = (file) => new Promise((resolve) => {
@@ -806,7 +807,22 @@ const exportJobPDF = async (job, showToast) => {
         ["L Wall to Arch.", w.measurements?.left_wall_to_arch],
         ["R Wall to Arch.", w.measurements?.right_wall_to_arch],
         [w.has_cornices ? "Cornice to Floor" : "Ceiling to Floor", w.measurements?.to_floor],
-      ] : [
+      ] : w.sliding_door ? (() => {
+        const numPanels = parseInt(w.sliding_panels) || 0;
+        const fields = [["Height", w.measurements?.sliding_height]];
+        for (let p = numPanels; p >= 1; p--) {
+          const label = numPanels === 1 ? "Panel Width" : (p === 1 ? "Panel 1 Width" : `Panel 1-${p} Width`);
+          fields.push([label, w.measurements?.[`sliding_panel_${p}_width`]]);
+        }
+        fields.push(
+          ["Treatment Width", w.measurements?.treatment_width],
+          ["Treatment Drop", w.measurements?.treatment_drop],
+          ["L Wall to Arch.", w.measurements?.left_wall_to_arch],
+          ["R Wall to Arch.", w.measurements?.right_wall_to_arch],
+          [w.has_cornices ? "Cornice to Floor" : "Ceiling to Floor", w.measurements?.to_floor],
+        );
+        return fields;
+      })() : [
         ["Inside Width", w.measurements?.inside_width],
         ["Outside Width", w.measurements?.outside_width],
         ["Inside Length", w.measurements?.inside_length],
@@ -821,25 +837,37 @@ const exportJobPDF = async (job, showToast) => {
       // Window info badges - prominent display
       let badgeY = y + 10;
       const badges = [];
-      if (w.control_side) badges.push({ label: "CONTROL SIDE", value: w.control_side.charAt(0).toUpperCase() + w.control_side.slice(1), color: [37, 99, 235], bg: [239, 246, 255] });
-      if (w.has_cornices) badges.push({ label: "CORNICES", value: "Yes", color: [141, 199, 63], bg: [242, 249, 231] });
-      if (!w.has_cornices) badges.push({ label: "CORNICES", value: "No", color: [148, 163, 184], bg: [241, 245, 249] });
       if (w.is_bay) badges.push({ label: "TYPE", value: "Bay Window", color: [180, 83, 9], bg: [255, 247, 237] });
+      if (w.sliding_door) badges.push({ label: "TYPE", value: `Sliding Door (${w.sliding_panels || "?"}P)`, color: [180, 83, 9], bg: [255, 247, 237] });
+      badges.push({ label: "CORNICES", value: w.has_cornices ? "Yes" : "No", color: w.has_cornices ? [141, 199, 63] : [148, 163, 184], bg: w.has_cornices ? [242, 249, 231] : [241, 245, 249] });
+      badges.push({ label: "WALL TO WALL", value: w.wall_to_wall ? "Yes" : "No", color: w.wall_to_wall ? [141, 199, 63] : [148, 163, 184], bg: w.wall_to_wall ? [242, 249, 231] : [241, 245, 249] });
+      if (w.opening) badges.push({ label: "OPENING", value: w.opening.split(" ").map(s => s.charAt(0).toUpperCase() + s.slice(1)).join(" "), color: [37, 99, 235], bg: [239, 246, 255] });
+      if (w.operating_method) badges.push({ label: "OPERATING", value: w.operating_method.split(" ").map(s => s.charAt(0).toUpperCase() + s.slice(1)).join(" "), color: [109, 40, 217], bg: [245, 243, 255] });
+      if (w.control_side) badges.push({ label: "CONTROL", value: w.control_side.charAt(0).toUpperCase() + w.control_side.slice(1), color: [37, 99, 235], bg: [239, 246, 255] });
 
       if (badges.length > 0) {
+        const boxW = 38;
+        const maxPerRow = Math.floor(cw / (boxW + 4));
         let bx = mx;
+        let count = 0;
         badges.forEach((b) => {
-          const boxW = 38;
+          if (count > 0 && count % maxPerRow === 0) {
+            bx = mx;
+            badgeY += 17;
+          }
+          // Use wider box for long values
+          const thisW = b.value.length > 8 ? 54 : boxW;
           doc.setFillColor(...b.bg);
-          doc.roundedRect(bx, badgeY, boxW, 14, 2, 2, "F");
-          doc.setFontSize(6);
+          doc.roundedRect(bx, badgeY, thisW, 14, 2, 2, "F");
+          doc.setFontSize(5);
           doc.setFont("helvetica", "bold");
           doc.setTextColor(...b.color);
-          doc.text(b.label, bx + boxW / 2, badgeY + 5, { align: "center" });
-          doc.setFontSize(9);
+          doc.text(b.label, bx + thisW / 2, badgeY + 5, { align: "center" });
+          doc.setFontSize(b.value.length > 12 ? 7 : 9);
           doc.setTextColor(15, 23, 42);
-          doc.text(b.value, bx + boxW / 2, badgeY + 11, { align: "center" });
-          bx += boxW + 4;
+          doc.text(b.value, bx + thisW / 2, badgeY + 11, { align: "center" });
+          bx += thisW + 4;
+          count++;
         });
         badgeY += 18;
       }
@@ -964,6 +992,8 @@ export default function App() {
   const [syncSuccess, setSyncSuccess] = useState(null);
   const [leads, setLeads] = useState([]);
   const [showAddLead, setShowAddLead] = useState(false);
+  const [showCompleteModal, setShowCompleteModal] = useState(false);
+  const [editingUnlocked, setEditingUnlocked] = useState(false);
   const [lastRefresh, setLastRefresh] = useState(null);
   const [refreshing, setRefreshing] = useState(false);
   const [activeTab, setActiveTab] = useState("active"); // "active" | "history"
@@ -1022,8 +1052,13 @@ export default function App() {
         // Rebuild all remote jobs fresh from cloud
         const remoteJobs = remoteRows.map((row) => {
           const lead = row.leads || {};
+          // Handle both old format (array) and new format ({_meta, items})
+          const rawWindows = row.windows;
+          const windowsMeta = rawWindows?._meta || {};
           const windowData = Array.isArray(row.measurements_json) ? row.measurements_json
-            : Array.isArray(row.windows) ? row.windows : [];
+            : Array.isArray(rawWindows) ? rawWindows
+            : Array.isArray(rawWindows?.items) ? rawWindows.items : [];
+          const isJobCompleted = windowsMeta.is_completed || false;
 
           // Check if we have local base64 photos to preserve
           const localJob = prev.find((j) => j.id === row.id);
@@ -1078,6 +1113,7 @@ export default function App() {
             suburb: lead.suburb || "",
             postcode: lead.postcode || "",
             status: lead.status || "In Progress",
+            is_completed: isJobCompleted,
             measure_date: row.measure_date || "",
             measure_time: row.measure_time || "",
             windows,
@@ -1206,7 +1242,7 @@ export default function App() {
             lead_id: job.lead_id || null,
             measure_date: job.measure_date || null,
             measure_time: job.measure_time || null,
-            windows: windowsSummary,
+            windows: { _meta: { is_completed: job.is_completed || false }, items: windowsSummary },
             measurements_json: windowsSummary,
             created_at: job.created_at,
           };
@@ -1265,6 +1301,8 @@ export default function App() {
   const currentJob = jobs.find((j) => j.id === currentJobId) || null;
   const currentWindow = currentJob?.windows?.[currentWindowIdx] || null;
   const isHistory = currentJob && currentJob.status !== "In Progress";
+  const isCompleted = currentJob?.is_completed || false;
+  const isLocked = (isHistory || isCompleted) && !editingUnlocked;
 
   // Split jobs into active and history
   const activeJobs = jobs.filter((j) => !j.status || j.status === "In Progress");
@@ -1405,8 +1443,12 @@ export default function App() {
       id: genId(),
       label: `Window ${j.windows.length + 1}`,
       is_bay: false,
-      control_side: "",
       has_cornices: false,
+      wall_to_wall: false,
+      sliding_door: false,
+      opening: "",
+      operating_method: "",
+      control_side: "",
       main_photo: null,
       extra_photos: [],
       measurements: blankMeasurements(),
@@ -1537,7 +1579,7 @@ export default function App() {
         lead_id: job.lead_id || null,
         measure_date: job.measure_date || null,
         measure_time: job.measure_time || null,
-        windows: windowsSummary,
+        windows: { _meta: { is_completed: job.is_completed || false }, items: windowsSummary },
         measurements_json: windowsSummary,
         created_at: job.created_at,
       };
@@ -1586,8 +1628,8 @@ export default function App() {
   };
 
   // ---- NAVIGATION ----
-  const goList = () => { setScreen("list"); setCurrentJobId(null); setCurrentWindowIdx(null); };
-  const goJob = (id) => { setCurrentJobId(id); setScreen("job"); setCurrentWindowIdx(null); };
+  const goList = () => { setScreen("list"); setCurrentJobId(null); setCurrentWindowIdx(null); setEditingUnlocked(false); };
+  const goJob = (id) => { setCurrentJobId(id); setScreen("job"); setCurrentWindowIdx(null); setEditingUnlocked(false); };
   const goWindow = (idx) => { setCurrentWindowIdx(idx); setScreen("window"); };
 
   // ============================================================
@@ -1659,6 +1701,9 @@ export default function App() {
                               ) : (
                                 <span className="pill pill-local">Local only</span>
                               )}
+                              {job.is_completed && (
+                                <span className="pill" style={{ background: "var(--accent-bg)", color: "var(--accent)" }}><Icons.Check size={10} /> Completed</span>
+                              )}
                             </div>
                           </div>
                           <div className="job-meta">
@@ -1688,8 +1733,11 @@ export default function App() {
                           <div className="job-info">
                             <div className="job-name">{job.lead_name || "Untitled Lead"}</div>
                             <div className="job-address">{[job.street, job.suburb, job.postcode].filter(Boolean).join(", ") || "No address"}</div>
-                            <div style={{ marginTop: 4 }}>
+                            <div style={{ marginTop: 4, display: "flex", gap: 6 }}>
                               <span className={`pill ${getStatusPillClass(job.status)}`}>{job.status}</span>
+                              {job.is_completed && (
+                                <span className="pill" style={{ background: "var(--accent-bg)", color: "var(--accent)" }}><Icons.Check size={10} /> Completed</span>
+                              )}
                             </div>
                           </div>
                           <div className="job-meta">
@@ -1722,10 +1770,24 @@ export default function App() {
                   <span className={`pill ${getStatusPillClass(currentJob.status)}`}>{currentJob.status}</span>
                 ) : (
                   <>
-                    {currentJob.synced ? (
-                      <span className="pill pill-synced"><Icons.Check size={12} /> Synced</span>
-                    ) : (
-                      <span className="pill pill-local">Local</span>
+                    {isCompleted && !editingUnlocked && (
+                      <span className="pill pill-synced" style={{ background: "var(--accent-bg)", color: "var(--accent)" }}>
+                        <Icons.Check size={10} /> Completed
+                      </span>
+                    )}
+                    {editingUnlocked && (
+                      <span className="pill pill-local" style={{ background: "#FFF7ED", color: "#C2410C" }}>
+                        Editing
+                      </span>
+                    )}
+                    {!isCompleted && !editingUnlocked && (
+                      <>
+                        {currentJob.synced ? (
+                          <span className="pill pill-synced"><Icons.Check size={12} /> Synced</span>
+                        ) : (
+                          <span className="pill pill-local">Local</span>
+                        )}
+                      </>
                     )}
                     <button className="btn btn-ghost" onClick={() => syncJob(currentJob.id)} title="Sync to Supabase">
                       <Icons.Cloud size={18} />
@@ -1747,7 +1809,7 @@ export default function App() {
                           className="field-input"
                           style={{ flex: 1 }}
                           value={currentJob.lead_id || ""}
-                          disabled={isHistory}
+                          disabled={isLocked}
                           onChange={(e) => {
                             if (e.target.value) selectLead(e.target.value);
                           }}
@@ -1757,7 +1819,7 @@ export default function App() {
                             <option key={lead.id} value={lead.id}>{lead.name}</option>
                           ))}
                         </select>
-                        {!currentJob.lead_id && !isHistory && (
+                        {!currentJob.lead_id && !isLocked && (
                           <button
                             className="btn btn-primary"
                             style={{ flexShrink: 0, padding: "10px 14px" }}
@@ -1774,7 +1836,7 @@ export default function App() {
                         className="field-input"
                         placeholder="Auto-filled from lead"
                         value={currentJob.lead_name}
-                        disabled={isHistory}
+                        disabled={isLocked}
                         onChange={(e) => updateLeadField(currentJob.id, "lead_name", e.target.value)}
                       />
                     </div>
@@ -1786,7 +1848,7 @@ export default function App() {
                           type="tel"
                           placeholder="Auto-filled"
                           value={currentJob.phone}
-                          disabled={isHistory}
+                          disabled={isLocked}
                           onChange={(e) => updateLeadField(currentJob.id, "phone", e.target.value)}
                         />
                       </div>
@@ -1797,7 +1859,7 @@ export default function App() {
                           type="email"
                           placeholder="Auto-filled"
                           value={currentJob.email || ""}
-                          disabled={isHistory}
+                          disabled={isLocked}
                           onChange={(e) => updateLeadField(currentJob.id, "email", e.target.value)}
                         />
                       </div>
@@ -1808,7 +1870,7 @@ export default function App() {
                         className="field-input"
                         placeholder="e.g. 42 Brunswick St"
                         value={currentJob.street || ""}
-                        disabled={isHistory}
+                        disabled={isLocked}
                         onChange={(e) => updateLeadField(currentJob.id, "street", e.target.value)}
                       />
                     </div>
@@ -1819,7 +1881,7 @@ export default function App() {
                           className="field-input"
                           placeholder="e.g. Fitzroy"
                           value={currentJob.suburb || ""}
-                          disabled={isHistory}
+                          disabled={isLocked}
                           onChange={(e) => updateLeadField(currentJob.id, "suburb", e.target.value)}
                         />
                       </div>
@@ -1829,7 +1891,7 @@ export default function App() {
                           className="field-input"
                           placeholder="3065"
                           value={currentJob.postcode || ""}
-                          disabled={isHistory}
+                          disabled={isLocked}
                           onChange={(e) => updateLeadField(currentJob.id, "postcode", e.target.value)}
                         />
                       </div>
@@ -1839,7 +1901,7 @@ export default function App() {
                       <select
                         className="field-input"
                         value={currentJob.status || "In Progress"}
-                        disabled={isHistory}
+                        disabled={isLocked}
                         onChange={(e) => updateLeadField(currentJob.id, "status", e.target.value)}
                       >
                         {STATUS_OPTIONS.map((s) => (
@@ -1854,7 +1916,7 @@ export default function App() {
                           className="field-input"
                           type="date"
                           value={currentJob.measure_date}
-                          disabled={isHistory}
+                          disabled={isLocked}
                           onChange={(e) => updateLeadField(currentJob.id, "measure_date", e.target.value)}
                         />
                       </div>
@@ -1864,7 +1926,7 @@ export default function App() {
                           className="field-input"
                           type="time"
                           value={currentJob.measure_time}
-                          disabled={isHistory}
+                          disabled={isLocked}
                           onChange={(e) => updateJob(currentJob.id, { measure_time: e.target.value })}
                         />
                       </div>
@@ -1911,7 +1973,7 @@ export default function App() {
                   </div>
                 )}
 
-                {!isHistory && (
+                {!isLocked && (
                   <button className="btn btn-secondary btn-block" onClick={addWindow}>
                     <Icons.Plus size={16} /> Add Window
                   </button>
@@ -1919,11 +1981,58 @@ export default function App() {
 
                 <div className="divider" />
 
+                {/* Complete / Edit buttons */}
+                {!isHistory && (
+                  <div style={{ display: "flex", gap: 8, marginBottom: 8 }}>
+                    {isCompleted && !editingUnlocked ? (
+                      <>
+                        <button
+                          className="btn btn-block"
+                          style={{ flex: 1, background: "var(--warm-100)", color: "var(--ink)", border: "1.5px solid var(--warm-200)" }}
+                          onClick={() => setEditingUnlocked(true)}
+                        >
+                          <Icons.Edit size={16} /> Edit
+                        </button>
+                        <button
+                          className="btn btn-block"
+                          style={{ flex: 2, background: "var(--accent-bg)", color: "var(--accent)", fontWeight: 600 }}
+                          disabled
+                        >
+                          <Icons.Check size={16} /> Completed
+                        </button>
+                      </>
+                    ) : editingUnlocked ? (
+                      <button
+                        className="btn btn-block btn-lg"
+                        style={{ flex: 1, background: "var(--accent-dark)", color: "#fff", fontWeight: 700 }}
+                        onClick={() => {
+                          updateJob(currentJob.id, { is_completed: true });
+                          setEditingUnlocked(false);
+                          showToast("Check measure locked ✓");
+                        }}
+                      >
+                        <Icons.Check size={18} /> Save & Lock
+                      </button>
+                    ) : (
+                      <button
+                        className="btn btn-block btn-lg"
+                        style={{ flex: 1, background: "var(--accent-dark)", color: "#fff", fontWeight: 700 }}
+                        onClick={() => {
+                          syncJob(currentJob.id);
+                          setShowCompleteModal(true);
+                        }}
+                      >
+                        <Icons.Check size={18} /> Complete Check Measure
+                      </button>
+                    )}
+                  </div>
+                )}
+
                 <button className="btn btn-primary btn-block" style={{ marginBottom: 8 }} onClick={() => exportJobPDF(currentJob, showToast)}>
                   <Icons.Download size={16} /> Export PDF
                 </button>
 
-                {!isHistory && (
+                {!isLocked && !isHistory && (
                   <button className="btn btn-danger btn-block" style={{ marginTop: 8 }} onClick={() => {
                     if (confirm("Delete this entire job?")) deleteJob(currentJob.id);
                   }}>
@@ -1946,7 +2055,7 @@ export default function App() {
             onUpdate={(updates) => updateWindow(currentWindowIdx, updates)}
             onDelete={() => deleteWindow(currentWindowIdx)}
             onDeletePhoto={deletePhotoFromStorage}
-            readOnly={isHistory}
+            readOnly={isLocked}
             onNext={() => {
               if (currentWindowIdx < currentJob.windows.length - 1) {
                 setCurrentWindowIdx(currentWindowIdx + 1);
@@ -2010,6 +2119,67 @@ export default function App() {
               showToast("Lead added ✓");
             }}
           />
+        )}
+
+        {/* Complete Check Measure Modal */}
+        {showCompleteModal && currentJob && (
+          <div style={{
+            position: "fixed", inset: 0, background: "rgba(0,0,0,0.5)", zIndex: 200,
+            display: "flex", alignItems: "center", justifyContent: "center", padding: 16,
+          }} onClick={() => setShowCompleteModal(false)}>
+            <div style={{
+              background: "#fff", borderRadius: 16, maxWidth: 480, width: "100%",
+              maxHeight: "85vh", overflowY: "auto", padding: 0,
+            }} onClick={(e) => e.stopPropagation()}>
+
+              {/* Header */}
+              <div style={{ padding: "20px 24px 16px", borderBottom: "1px solid var(--warm-100)", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                <div>
+                  <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: "0.1em", color: "var(--warm-300)", textTransform: "uppercase", marginBottom: 4 }}>Complete Check Measure</div>
+                  <div style={{ fontSize: 18, fontWeight: 700, color: "var(--ink)" }}>{currentJob.lead_name || "Untitled"}</div>
+                </div>
+                <button className="btn btn-ghost" onClick={() => setShowCompleteModal(false)}><Icons.X size={20} /></button>
+              </div>
+
+              {/* Summary */}
+              <div style={{ padding: "20px 24px" }}>
+                <div style={{ background: "var(--accent-bg)", borderRadius: 8, padding: 16, marginBottom: 16 }}>
+                  <div style={{ fontSize: 13, fontWeight: 600, color: "var(--accent)", marginBottom: 8 }}>Check Measure Summary</div>
+                  <div style={{ fontSize: 13, color: "var(--ink)", lineHeight: 1.6 }}>
+                    <div>{currentJob.windows.length} window{currentJob.windows.length !== 1 ? "s" : ""} measured</div>
+                    <div>{currentJob.windows.filter(w => w.main_photo).length} photo{currentJob.windows.filter(w => w.main_photo).length !== 1 ? "s" : ""} captured</div>
+                    <div>{[currentJob.street, currentJob.suburb, currentJob.postcode].filter(Boolean).join(", ") || "No address"}</div>
+                  </div>
+                </div>
+
+                {/* Placeholder for future completion questions */}
+                <div style={{ background: "var(--warm-100)", borderRadius: 8, padding: 16, marginBottom: 16, border: "1px dashed var(--warm-200)" }}>
+                  <div style={{ fontSize: 12, fontWeight: 600, color: "var(--warm-300)", textAlign: "center" }}>
+                    Completion questions will be added here
+                  </div>
+                </div>
+              </div>
+
+              {/* Footer */}
+              <div style={{ padding: "12px 24px 24px", display: "flex", gap: 10 }}>
+                <button className="btn btn-secondary" style={{ flex: 1 }} onClick={() => setShowCompleteModal(false)}>
+                  Cancel
+                </button>
+                <button
+                  className="btn btn-lg"
+                  style={{ flex: 2, background: "var(--accent-dark)", color: "#fff", fontWeight: 700 }}
+                  onClick={() => {
+                    updateJob(currentJob.id, { is_completed: true });
+                    setShowCompleteModal(false);
+                    setEditingUnlocked(false);
+                    showToast("Check measure completed ✓");
+                  }}
+                >
+                  <Icons.Check size={18} /> Confirm Complete
+                </button>
+              </div>
+            </div>
+          </div>
         )}
       </div>
     </>
@@ -2190,29 +2360,46 @@ function WindowDetail({ job, window: win, windowIdx, totalWindows, onBack, onUpd
           <div className="section-title" style={{ padding: "0 0 8px", marginTop: 16 }}>Window Information</div>
           <div className="card mb-16">
             <div className="card-body">
-              {/* Control Side */}
-              <div style={{ marginBottom: 16 }}>
-                <span className="field-label">Control Side</span>
-                <div style={{ display: "flex", gap: 8, marginTop: 4 }}>
-                  {["Left", "Right"].map((side) => (
-                    <button
-                      key={side}
-                      disabled={readOnly}
-                      onClick={() => onUpdate({ control_side: side.toLowerCase() })}
-                      className="btn"
-                      style={{
-                        flex: 1,
-                        background: win.control_side === side.toLowerCase() ? "var(--accent)" : "var(--warm-100)",
-                        color: win.control_side === side.toLowerCase() ? "#fff" : "var(--ink)",
-                        border: `1.5px solid ${win.control_side === side.toLowerCase() ? "var(--accent)" : "var(--warm-200)"}`,
-                        opacity: readOnly ? 0.8 : 1,
-                        cursor: readOnly ? "not-allowed" : "pointer",
-                      }}
-                    >
-                      {side}
-                    </button>
-                  ))}
-                </div>
+              {/* Bay Window */}
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 16 }}>
+                <span style={{ fontSize: 14, fontWeight: 500 }}>Bay Window</span>
+                <button
+                  disabled={readOnly}
+                  onClick={() => onUpdate({ is_bay: !win.is_bay, sliding_door: false, sliding_panels: "" })}
+                  style={{
+                    width: 48, height: 28, borderRadius: 14, border: "none", cursor: readOnly ? "not-allowed" : "pointer",
+                    background: win.is_bay ? "var(--accent)" : "var(--warm-200)",
+                    position: "relative", transition: "background 0.2s",
+                  }}
+                >
+                  <div style={{
+                    width: 22, height: 22, borderRadius: 11, background: "#fff",
+                    position: "absolute", top: 3,
+                    left: win.is_bay ? 23 : 3,
+                    transition: "left 0.2s", boxShadow: "0 1px 3px rgba(0,0,0,0.2)",
+                  }} />
+                </button>
+              </div>
+
+              {/* Sliding Door */}
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 16 }}>
+                <span style={{ fontSize: 14, fontWeight: 500 }}>Sliding Door</span>
+                <button
+                  disabled={readOnly}
+                  onClick={() => onUpdate({ sliding_door: !win.sliding_door, is_bay: false, sliding_panels: win.sliding_door ? "" : (win.sliding_panels || "") })}
+                  style={{
+                    width: 48, height: 28, borderRadius: 14, border: "none", cursor: readOnly ? "not-allowed" : "pointer",
+                    background: win.sliding_door ? "var(--accent)" : "var(--warm-200)",
+                    position: "relative", transition: "background 0.2s",
+                  }}
+                >
+                  <div style={{
+                    width: 22, height: 22, borderRadius: 11, background: "#fff",
+                    position: "absolute", top: 3,
+                    left: win.sliding_door ? 23 : 3,
+                    transition: "left 0.2s", boxShadow: "0 1px 3px rgba(0,0,0,0.2)",
+                  }} />
+                </button>
               </div>
 
               {/* Cornices */}
@@ -2236,25 +2423,103 @@ function WindowDetail({ job, window: win, windowIdx, totalWindows, onBack, onUpd
                 </button>
               </div>
 
-              {/* Bay Window */}
-              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-                <span style={{ fontSize: 14, fontWeight: 500 }}>Bay Window</span>
+              {/* Wall to Wall */}
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 16 }}>
+                <span style={{ fontSize: 14, fontWeight: 500 }}>Wall to Wall</span>
                 <button
                   disabled={readOnly}
-                  onClick={() => onUpdate({ is_bay: !win.is_bay })}
+                  onClick={() => onUpdate({ wall_to_wall: !win.wall_to_wall })}
                   style={{
                     width: 48, height: 28, borderRadius: 14, border: "none", cursor: readOnly ? "not-allowed" : "pointer",
-                    background: win.is_bay ? "var(--accent)" : "var(--warm-200)",
+                    background: win.wall_to_wall ? "var(--accent)" : "var(--warm-200)",
                     position: "relative", transition: "background 0.2s",
                   }}
                 >
                   <div style={{
                     width: 22, height: 22, borderRadius: 11, background: "#fff",
                     position: "absolute", top: 3,
-                    left: win.is_bay ? 23 : 3,
+                    left: win.wall_to_wall ? 23 : 3,
                     transition: "left 0.2s", boxShadow: "0 1px 3px rgba(0,0,0,0.2)",
                   }} />
                 </button>
+              </div>
+
+              {/* Opening */}
+              <div style={{ marginBottom: 16 }}>
+                <span className="field-label">Opening</span>
+                <div style={{ display: "flex", gap: 8, marginTop: 4 }}>
+                  {["Left Bunch", "Centre", "Right Bunch"].map((opt) => (
+                    <button
+                      key={opt}
+                      disabled={readOnly}
+                      onClick={() => onUpdate({ opening: opt.toLowerCase() })}
+                      className="btn"
+                      style={{
+                        flex: 1, padding: "8px 4px", fontSize: 12,
+                        background: win.opening === opt.toLowerCase() ? "var(--accent)" : "var(--warm-100)",
+                        color: win.opening === opt.toLowerCase() ? "#fff" : "var(--ink)",
+                        border: `1.5px solid ${win.opening === opt.toLowerCase() ? "var(--accent)" : "var(--warm-200)"}`,
+                        opacity: readOnly ? 0.8 : 1,
+                        cursor: readOnly ? "not-allowed" : "pointer",
+                      }}
+                    >
+                      {opt}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {/* Operating Method */}
+              <div style={{ marginBottom: 16 }}>
+                <span className="field-label">Operating Method</span>
+                <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginTop: 4 }}>
+                  {["Flick Stick", "Cord Drawn", "Battery", "Hardwire"].map((method) => {
+                    const isSelected = win.operating_method === method.toLowerCase();
+                    return (
+                      <button
+                        key={method}
+                        disabled={readOnly}
+                        onClick={() => onUpdate({ operating_method: isSelected ? "" : method.toLowerCase() })}
+                        className="btn"
+                        style={{
+                          flex: "1 0 calc(50% - 4px)", padding: "8px 4px", fontSize: 12,
+                          background: isSelected ? "var(--accent)" : "var(--warm-100)",
+                          color: isSelected ? "#fff" : "var(--ink)",
+                          border: `1.5px solid ${isSelected ? "var(--accent)" : "var(--warm-200)"}`,
+                          opacity: readOnly ? 0.8 : 1,
+                          cursor: readOnly ? "not-allowed" : "pointer",
+                        }}
+                      >
+                        {method}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+
+              {/* Control Side */}
+              <div>
+                <span className="field-label">Control Side</span>
+                <div style={{ display: "flex", gap: 8, marginTop: 4 }}>
+                  {["Left", "Right"].map((side) => (
+                    <button
+                      key={side}
+                      disabled={readOnly}
+                      onClick={() => onUpdate({ control_side: side.toLowerCase() })}
+                      className="btn"
+                      style={{
+                        flex: 1,
+                        background: win.control_side === side.toLowerCase() ? "var(--accent)" : "var(--warm-100)",
+                        color: win.control_side === side.toLowerCase() ? "#fff" : "var(--ink)",
+                        border: `1.5px solid ${win.control_side === side.toLowerCase() ? "var(--accent)" : "var(--warm-200)"}`,
+                        opacity: readOnly ? 0.8 : 1,
+                        cursor: readOnly ? "not-allowed" : "pointer",
+                      }}
+                    >
+                      {side}
+                    </button>
+                  ))}
+                </div>
               </div>
             </div>
           </div>
@@ -2289,17 +2554,85 @@ function WindowDetail({ job, window: win, windowIdx, totalWindows, onBack, onUpd
                   </div>
                 </div>
               </div>
+            </>
+          ) : win.sliding_door ? (
+            <>
+              <div className="meas-section-header">
+                <div className="meas-section-dot" style={{ background: "var(--blue)" }} />
+                <span style={{ fontSize: 11, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.08em", color: "var(--blue)" }}>
+                  Sliding Door Measurements
+                </span>
+              </div>
+              <div className="card mb-16">
+                <div className="card-body">
+                  <div className="field" style={{ marginBottom: 12 }}>
+                    <label className="field-label">Number of Panels</label>
+                    <select
+                      className="field-input"
+                      value={win.sliding_panels || ""}
+                      disabled={readOnly}
+                      onChange={(e) => onUpdate({ sliding_panels: e.target.value })}
+                    >
+                      <option value="">— Select —</option>
+                      {[1, 2, 3, 4].map((n) => (
+                        <option key={n} value={n}>{n} Panel{n > 1 ? "s" : ""}</option>
+                      ))}
+                    </select>
+                  </div>
+                  <div className="meas-grid">
+                    {/* Height */}
+                    <div className="meas-item">
+                      <span className="meas-label">Height</span>
+                      <input
+                        className="meas-input"
+                        type="number"
+                        inputMode="decimal"
+                        placeholder="0"
+                        value={win.measurements.sliding_height || ""}
+                        disabled={readOnly}
+                        onChange={(e) => updateMeas("sliding_height", e.target.value)}
+                      />
+                      <span className="meas-unit">mm</span>
+                    </div>
+                    {/* Panel widths based on number of panels */}
+                    {(() => {
+                      const numPanels = parseInt(win.sliding_panels) || 0;
+                      const panelFields = [];
+                      for (let p = numPanels; p >= 1; p--) {
+                        const label = numPanels === 1 ? "Panel W" : (p === 1 ? "P1 Width" : `P1-${p} Width`);
+                        const key = `sliding_panel_${p}_width`;
+                        panelFields.push(
+                          <div className="meas-item" key={key}>
+                            <span className="meas-label">{p === 1 && numPanels > 1 ? "P1 Width" : label}</span>
+                            <input
+                              className="meas-input"
+                              type="number"
+                              inputMode="decimal"
+                              placeholder="0"
+                              value={win.measurements[key] || ""}
+                              disabled={readOnly}
+                              onChange={(e) => updateMeas(key, e.target.value)}
+                            />
+                            <span className="meas-unit">mm</span>
+                          </div>
+                        );
+                      }
+                      return panelFields;
+                    })()}
+                  </div>
+                </div>
+              </div>
 
               <div className="meas-section-header">
-                <div className="meas-section-dot" style={{ background: "var(--success)" }} />
-                <span style={{ fontSize: 11, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.08em", color: "var(--success)" }}>
-                  Surrounds
+                <div className="meas-section-dot" style={{ background: "var(--accent)" }} />
+                <span style={{ fontSize: 11, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.08em", color: "var(--accent)" }}>
+                  Treatment Dimensions
                 </span>
               </div>
               <div className="card mb-16">
                 <div className="card-body">
                   <div className="meas-grid">
-                    {getSurroundsFields(win.has_cornices).map((f) => (
+                    {MEASUREMENT_FIELDS.slice(4, 6).map((f) => (
                       <div className="meas-item" key={f.key}>
                         <span className="meas-label">{f.label}</span>
                         <input
@@ -2307,7 +2640,7 @@ function WindowDetail({ job, window: win, windowIdx, totalWindows, onBack, onUpd
                           type="number"
                           inputMode="decimal"
                           placeholder="0"
-                          value={win.measurements[f.key] || ""}
+                          value={win.measurements[f.key]}
                           disabled={readOnly}
                           onChange={(e) => updateMeas(f.key, e.target.value)}
                         />
@@ -2375,36 +2708,37 @@ function WindowDetail({ job, window: win, windowIdx, totalWindows, onBack, onUpd
                   </div>
                 </div>
               </div>
-
-              <div className="meas-section-header">
-                <div className="meas-section-dot" style={{ background: "var(--success)" }} />
-                <span style={{ fontSize: 11, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.08em", color: "var(--success)" }}>
-                  Surrounds
-                </span>
-              </div>
-              <div className="card mb-16">
-                <div className="card-body">
-                  <div className="meas-grid">
-                    {getSurroundsFields(win.has_cornices).map((f) => (
-                      <div className="meas-item" key={f.key}>
-                        <span className="meas-label">{f.label}</span>
-                        <input
-                          className="meas-input"
-                          type="number"
-                          inputMode="decimal"
-                          placeholder="0"
-                          value={win.measurements[f.key] || ""}
-                          disabled={readOnly}
-                          onChange={(e) => updateMeas(f.key, e.target.value)}
-                        />
-                        <span className="meas-unit">mm</span>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              </div>
             </>
           )}
+
+          {/* Surrounds - shown for all types */}
+          <div className="meas-section-header">
+            <div className="meas-section-dot" style={{ background: "var(--success)" }} />
+            <span style={{ fontSize: 11, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.08em", color: "var(--success)" }}>
+              Surrounds
+            </span>
+          </div>
+          <div className="card mb-16">
+            <div className="card-body">
+              <div className="meas-grid">
+                {getSurroundsFields(win.has_cornices).map((f) => (
+                  <div className="meas-item" key={f.key}>
+                    <span className="meas-label">{f.label}</span>
+                    <input
+                      className="meas-input"
+                      type="number"
+                      inputMode="decimal"
+                      placeholder="0"
+                      value={win.measurements[f.key] || ""}
+                      disabled={readOnly}
+                      onChange={(e) => updateMeas(f.key, e.target.value)}
+                    />
+                    <span className="meas-unit">mm</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
 
           {/* Comments */}
           <div className="section-title" style={{ padding: "0 0 8px" }}>Comments & Notes</div>

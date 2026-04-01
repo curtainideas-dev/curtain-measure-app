@@ -848,6 +848,7 @@ const exportJobPDF = async (job, showToast) => {
       if (w.opening) badges.push({ label: "OPENING", value: w.opening.split(" ").map(s => s.charAt(0).toUpperCase() + s.slice(1)).join(" "), color: [37, 99, 235], bg: [239, 246, 255] });
       if (w.operating_method) badges.push({ label: "OPERATING", value: w.operating_method.split(" ").map(s => s.charAt(0).toUpperCase() + s.slice(1)).join(" "), color: [109, 40, 217], bg: [245, 243, 255] });
       if (w.control_side) badges.push({ label: "CONTROL", value: w.control_side.charAt(0).toUpperCase() + w.control_side.slice(1), color: [37, 99, 235], bg: [239, 246, 255] });
+      if (w.treatments?.length > 0) badges.push({ label: "TREATMENTS", value: w.treatments.map(t => t.charAt(0).toUpperCase() + t.slice(1)).join(", "), color: [6, 95, 70], bg: [236, 253, 245] });
 
       if (badges.length > 0) {
         const boxW = 38;
@@ -1091,6 +1092,7 @@ export default function App() {
             return {
               id: rw.id || genId(),
               label: rw.label || "Window",
+              treatments: rw.treatments ?? lw?.treatments ?? [],
               is_bay: rw.is_bay ?? lw?.is_bay ?? false,
               sliding_door: rw.sliding_door ?? lw?.sliding_door ?? false,
               sliding_panels: rw.sliding_panels ?? lw?.sliding_panels ?? "",
@@ -1241,6 +1243,7 @@ export default function App() {
             windowsSummary.push({
               id: w.id,
               label: w.label,
+              treatments: w.treatments || [],
               is_bay: w.is_bay || false,
               sliding_door: w.sliding_door || false,
               sliding_panels: w.sliding_panels || "",
@@ -1463,6 +1466,7 @@ export default function App() {
     const newWin = {
       id: genId(),
       label: `Window ${j.windows.length + 1}`,
+      treatments: [],
       is_bay: false,
       has_cornices: false,
       wall_to_wall: false,
@@ -1587,6 +1591,7 @@ export default function App() {
         windowsSummary.push({
           id: w.id,
           label: w.label,
+          treatments: w.treatments || [],
           is_bay: w.is_bay || false,
           sliding_door: w.sliding_door || false,
           sliding_panels: w.sliding_panels || "",
@@ -2409,6 +2414,41 @@ function WindowDetail({ job, window: win, windowIdx, totalWindows, onBack, onUpd
           <div className="section-title" style={{ padding: "0 0 8px", marginTop: 16 }}>Window Information</div>
           <div className="card mb-16">
             <div className="card-body">
+              {/* Treatments */}
+              <div style={{ marginBottom: 16 }}>
+                <span className="field-label">Treatments</span>
+                <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginTop: 4 }}>
+                  {["Sheer", "Drape", "Blind", "Shutter", "Awning"].map((treatment) => {
+                    const treatments = win.treatments || [];
+                    const isSelected = treatments.includes(treatment.toLowerCase());
+                    return (
+                      <button
+                        key={treatment}
+                        disabled={readOnly}
+                        onClick={() => {
+                          const current = win.treatments || [];
+                          const updated = isSelected
+                            ? current.filter((t) => t !== treatment.toLowerCase())
+                            : [...current, treatment.toLowerCase()];
+                          onUpdate({ treatments: updated });
+                        }}
+                        className="btn"
+                        style={{
+                          flex: "1 0 calc(33.33% - 6px)", padding: "8px 4px", fontSize: 12,
+                          background: isSelected ? "var(--blue)" : "var(--warm-100)",
+                          color: isSelected ? "#fff" : "var(--ink)",
+                          border: `1.5px solid ${isSelected ? "var(--blue)" : "var(--warm-200)"}`,
+                          opacity: readOnly ? 0.8 : 1,
+                          cursor: readOnly ? "not-allowed" : "pointer",
+                        }}
+                      >
+                        {isSelected && <Icons.Check size={12} />} {treatment}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+
               {/* Bay Window */}
               <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 16 }}>
                 <span style={{ fontSize: 14, fontWeight: 500 }}>Bay Window</span>

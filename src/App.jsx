@@ -1030,7 +1030,6 @@ export default function App() {
   // Shared function to rebuild jobs from Supabase (used by both auto-poll and manual refresh)
   const hardSyncFromSupabase = useCallback(async () => {
     if (!SUPABASE_URL || !SUPABASE_ANON_KEY) return;
-    if (isSyncing.current) { console.log("[POLL] Skipped — auto-sync in progress"); return; }
     try {
       const res = await fetch(
         `${SUPABASE_URL}/rest/v1/check_measures?select=*,leads(id,name,phone,email,street,suburb,postcode,status)&order=created_at.desc`,
@@ -1050,11 +1049,15 @@ export default function App() {
       setJobs((prev) => {
         const remoteIds = new Set(remoteRows.map((r) => r.id));
 
-        // Keep local-only unsynced jobs that aren't in Supabase yet
+        // Keep local unsynced jobs that don't exist in Supabase yet
         const localOnly = prev.filter((j) => !j.synced && !remoteIds.has(j.id));
+        
+        // Keep local unsynced jobs that DO exist in Supabase - don't overwrite with stale cloud data
+        const localUnsyncedExisting = prev.filter((j) => !j.synced && remoteIds.has(j.id));
+        const unsyncedIds = new Set(localUnsyncedExisting.map((j) => j.id));
 
-        // Rebuild all remote jobs fresh from cloud
-        const remoteJobs = remoteRows.map((row) => {
+        // Rebuild remote jobs, but skip ones that have pending local changes
+        const remoteJobs = remoteRows.filter((row) => !unsyncedIds.has(row.id)).map((row) => {
           const lead = row.leads || {};
           // Handle both old format (array) and new format ({_meta, items})
           const rawWindows = row.windows;
@@ -1133,7 +1136,7 @@ export default function App() {
           };
         });
 
-        return [...localOnly, ...remoteJobs];
+        return [...localOnly, ...localUnsyncedExisting, ...remoteJobs];
       });
 
       setSupabaseConnected(true);
@@ -1150,7 +1153,7 @@ export default function App() {
     setRefreshing(false);
   }, [hardSyncFromSupabase]);
 
-  // Load from localStorage on mount, then fetch from Supabase
+  // Load from localStorage on mount, then fetch from Supabase once
   useEffect(() => {
     try {
       const saved = localStorage.getItem("cmb_jobs");
@@ -1160,19 +1163,12 @@ export default function App() {
     hardSyncFromSupabase();
     fetchLeads();
 
-    // Poll every 30 seconds
-    const interval = setInterval(() => {
-      hardSyncFromSupabase();
-      fetchLeads();
-    }, 10000);
-
     setIsOnline(navigator.onLine);
     const on = () => setIsOnline(true);
     const off = () => setIsOnline(false);
     window.addEventListener("online", on);
     window.addEventListener("offline", off);
     return () => {
-      clearInterval(interval);
       window.removeEventListener("online", on);
       window.removeEventListener("offline", off);
     };
@@ -1205,7 +1201,12 @@ export default function App() {
 
     clearTimeout(autoSyncTimer.current);
     autoSyncTimer.current = setTimeout(async () => {
-      for (const job of allUnsynced) {
+      // Re-read jobs from the ref to get the LATEST state, not the stale closure
+      const currentJobs = prevJobsRef.current;
+      const latestUnsynced = currentJobs.filter((j) => !j.synced);
+      if (latestUnsynced.length === 0) { isSyncing.current = false; return; }
+
+      for (const job of latestUnsynced) {
         try {
           // Upload any base64 photos to Supabase Storage
           const windowsSummary = [];
@@ -1264,6 +1265,8 @@ export default function App() {
             measurements_json: windowsSummary,
             created_at: job.created_at,
           };
+
+          console.log("[AUTO-SYNC] Syncing job:", job.id, "lead_id:", payload.lead_id, "lead_name:", job.lead_name, "windows:", windowsSummary.length);
 
           const res = await fetch(`${SUPABASE_URL}/rest/v1/check_measures`, {
             method: "POST",
@@ -1703,6 +1706,23 @@ export default function App() {
               </button>
             </div>
 
+            {/* Refresh callout */}
+            <div
+              onClick={manualRefresh}
+              style={{
+                display: "flex", alignItems: "center", gap: 8, padding: "8px 16px",
+                background: "#EFF6FF", borderBottom: "1px solid #DBEAFE", cursor: "pointer",
+              }}
+            >
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#3B82F6" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"
+                style={{ animation: refreshing ? "spin 1s linear infinite" : "none" }}>
+                <polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 11-2.12-9.36L23 10"/>
+              </svg>
+              <span style={{ fontSize: 12, color: "#3B82F6", fontWeight: 500 }}>
+                Tap to refresh and receive updates from other devices
+              </span>
+            </div>
+
             <div className="scroll-area">
               {activeTab === "active" && (
                 <>
@@ -1720,14 +1740,16 @@ export default function App() {
                           <div className="job-info">
                             <div className="job-name">{job.lead_name || "Untitled Lead"}</div>
                             <div className="job-address">{[job.street, job.suburb, job.postcode].filter(Boolean).join(", ") || "No address"}</div>
-                            <div style={{ marginTop: 4, display: "flex", gap: 6 }}>
+                            <div style={{ marginTop: 4, display: "flex", gap: 6, flexWrap: "wrap" }}>
                               {job.synced ? (
                                 <span className="pill pill-synced"><Icons.Check size={10} /> Synced</span>
                               ) : (
                                 <span className="pill pill-local">Local only</span>
                               )}
-                              {job.is_completed && (
+                              {job.is_completed ? (
                                 <span className="pill" style={{ background: "var(--accent-bg)", color: "var(--accent)" }}><Icons.Check size={10} /> Completed</span>
+                              ) : (
+                                <span className="pill" style={{ background: "#FFF7ED", color: "#C2410C" }}><Icons.Edit size={10} /> In Progress</span>
                               )}
                             </div>
                           </div>
@@ -1758,10 +1780,12 @@ export default function App() {
                           <div className="job-info">
                             <div className="job-name">{job.lead_name || "Untitled Lead"}</div>
                             <div className="job-address">{[job.street, job.suburb, job.postcode].filter(Boolean).join(", ") || "No address"}</div>
-                            <div style={{ marginTop: 4, display: "flex", gap: 6 }}>
+                            <div style={{ marginTop: 4, display: "flex", gap: 6, flexWrap: "wrap" }}>
                               <span className={`pill ${getStatusPillClass(job.status)}`}>{job.status}</span>
-                              {job.is_completed && (
+                              {job.is_completed ? (
                                 <span className="pill" style={{ background: "var(--accent-bg)", color: "var(--accent)" }}><Icons.Check size={10} /> Completed</span>
+                              ) : (
+                                <span className="pill" style={{ background: "#FFF7ED", color: "#C2410C" }}><Icons.Edit size={10} /> In Progress</span>
                               )}
                             </div>
                           </div>

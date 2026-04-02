@@ -983,6 +983,153 @@ const exportJobPDF = async (job, showToast) => {
 };
 
 // ============================================================
+// QUOTING PLATFORM XLSX EXPORT
+// ============================================================
+const loadSheetJS = () => {
+  return new Promise((resolve, reject) => {
+    if (window.XLSX) return resolve(window.XLSX);
+    const s = document.createElement("script");
+    s.src = "https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js";
+    s.onload = () => resolve(window.XLSX);
+    s.onerror = reject;
+    document.head.appendChild(s);
+  });
+};
+
+const exportQuotingXLSX = async (job, showToast) => {
+  try {
+    showToast("Generating spreadsheet...");
+    const XLSX = await loadSheetJS();
+
+    const headers = [
+      "FeatureDescription", "SortOrderScreen", "InsideWidth", "InsideDrop",
+      "ArchitraveWidth", "ArchitraveDrop", "TreatmentWidth", "TreatmentDrop",
+      "ControlSide1", "WindowDepth", "LocationComments"
+    ];
+
+    const rows = [];
+    let sortOrder = 0;
+
+    const buildComments = (w, extraLines = []) => {
+      const parts = [];
+      const flags = [];
+      if (w.is_bay) flags.push("Bay Window");
+      if (w.sliding_door) flags.push("Sliding Door");
+      if (w.has_cornices) flags.push("Cornices");
+      if (w.wall_to_wall) flags.push("Wall to Wall");
+      if (flags.length) parts.push(flags.join(" | "));
+
+      const info = [];
+      if (w.opening) info.push(`Opening: ${w.opening}`);
+      if (w.operating_method) info.push(`Method: ${w.operating_method}`);
+      if (info.length) parts.push(info.join(" | "));
+
+      const surrounds = [];
+      const m = w.measurements || {};
+      if (m.left_wall_to_arch) surrounds.push(`Left Arch: ${m.left_wall_to_arch}`);
+      if (m.right_wall_to_arch) surrounds.push(`Right Arch: ${m.right_wall_to_arch}`);
+      if (m.arch_to_floor) surrounds.push(`Arch→Floor: ${m.arch_to_floor}`);
+      if (m.to_floor) surrounds.push(`${w.has_cornices ? "Cornice" : "Ceiling"}→Floor: ${m.to_floor}`);
+      if (surrounds.length) parts.push(surrounds.join(" | "));
+
+      if (w.is_bay) {
+        const bay = [];
+        if (m.bay_bulkhead_width) bay.push(`Bulkhead W: ${m.bay_bulkhead_width}`);
+        if (m.bay_bulkhead_height) bay.push(`Bulkhead H: ${m.bay_bulkhead_height}`);
+        if (m.bay_bulkhead_depth) bay.push(`Bulkhead D: ${m.bay_bulkhead_depth}`);
+        if (bay.length) parts.push(bay.join(" | "));
+      }
+
+      extraLines.forEach(l => parts.push(l));
+      if (w.comments) parts.push(`Notes: ${w.comments}`);
+      return parts.join("\n");
+    };
+
+    (job.windows || []).forEach((w) => {
+      sortOrder += 10;
+      const m = w.measurements || {};
+      const label = w.label || "Window";
+      const outsideW = m.outside_width;
+      const outsideD = m.outside_length;
+      const treatW = m.treatment_width;
+      const treatD = m.treatment_drop;
+      const controlSide = w.control_side || "";
+
+      const v = (val) => (val !== undefined && val !== null && val !== "") ? val : 0;
+
+      if (w.is_bay) {
+        const comments = buildComments(w);
+        const panels = [
+          { suffix: "A", width: m.bay_left_width, drop: m.bay_left_height },
+          { suffix: "B", width: m.bay_middle_width, drop: m.bay_middle_height },
+          { suffix: "C", width: m.bay_right_width, drop: m.bay_right_height },
+        ];
+        panels.forEach(({ suffix, width, drop }) => {
+          rows.push([
+            `${label}${suffix}`, sortOrder, v(width), v(drop),
+            v(outsideW), v(outsideD), v(treatW), v(treatD),
+            controlSide, 0, comments
+          ]);
+        });
+
+      } else if (w.sliding_door) {
+        const numPanels = parseInt(w.sliding_panels) || 1;
+        const cumulativeWidths = [];
+        for (let p = 1; p <= numPanels; p++) {
+          const val = parseFloat(m[`sliding_panel_${p}_width`]) || 0;
+          cumulativeWidths.push(val);
+        }
+        // Calculate individual panel widths from cumulative
+        const individualWidths = cumulativeWidths.map((cum, i) =>
+          i === 0 ? cum : cum - cumulativeWidths[i - 1]
+        );
+        const comments = buildComments(w,
+          [`Panels: ${numPanels}`, `Individual widths: ${individualWidths.join(", ")}`]
+        );
+        const suffixes = ["A", "B", "C", "D"];
+        individualWidths.forEach((width, i) => {
+          rows.push([
+            `${label}${suffixes[i]}`, sortOrder, v(width), v(m.sliding_height),
+            v(outsideW), v(outsideD), v(treatW), v(treatD),
+            controlSide, 0, comments
+          ]);
+        });
+
+      } else {
+        const comments = buildComments(w);
+        rows.push([
+          label, sortOrder, v(m.inside_width), v(m.inside_length),
+          v(outsideW), v(outsideD), v(treatW), v(treatD),
+          controlSide, 0, comments
+        ]);
+      }
+    });
+
+    const wsData = [headers, ...rows];
+    const ws = XLSX.utils.aoa_to_sheet(wsData);
+
+    // Column widths
+    ws["!cols"] = [
+      { wch: 20 }, { wch: 16 }, { wch: 12 }, { wch: 12 },
+      { wch: 16 }, { wch: 14 }, { wch: 14 }, { wch: 14 },
+      { wch: 12 }, { wch: 12 }, { wch: 50 }
+    ];
+
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, "Measurements");
+
+    const namePart = (job.lead_name || "measure").replace(/\s+/g, "_");
+    const addressPart = [job.street, job.suburb].filter(Boolean).join("_").replace(/\s+/g, "_");
+    const filename = `${namePart}${addressPart ? "_" + addressPart : ""}_Quoting.xlsx`;
+    XLSX.writeFile(wb, filename);
+    showToast("Spreadsheet downloaded ✓");
+  } catch (err) {
+    console.error("XLSX export error:", err);
+    showToast("Spreadsheet export failed");
+  }
+};
+
+// ============================================================
 // MAIN APP
 // ============================================================
 export default function App() {
@@ -2085,6 +2232,16 @@ export default function App() {
                 <button className="btn btn-primary btn-block" style={{ marginBottom: 8 }} onClick={() => exportJobPDF(currentJob, showToast)}>
                   <Icons.Download size={16} /> Export PDF
                 </button>
+
+                {isCompleted && !editingUnlocked && (
+                  <button
+                    className="btn btn-block"
+                    style={{ marginBottom: 8, background: "#e8f5e9", color: "#2e7d32", border: "1.5px solid #a5d6a7", fontWeight: 600 }}
+                    onClick={() => exportQuotingXLSX(currentJob, showToast)}
+                  >
+                    <Icons.Download size={16} /> Export Excel
+                  </button>
+                )}
 
                 {!isLocked && !isHistory && (
                   <button className="btn btn-danger btn-block" style={{ marginTop: 8 }} onClick={() => {

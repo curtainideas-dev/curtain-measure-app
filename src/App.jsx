@@ -983,153 +983,6 @@ const exportJobPDF = async (job, showToast) => {
 };
 
 // ============================================================
-// QUOTING PLATFORM XLSX EXPORT
-// ============================================================
-const loadSheetJS = () => {
-  return new Promise((resolve, reject) => {
-    if (window.XLSX) return resolve(window.XLSX);
-    const s = document.createElement("script");
-    s.src = "https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js";
-    s.onload = () => resolve(window.XLSX);
-    s.onerror = reject;
-    document.head.appendChild(s);
-  });
-};
-
-const exportQuotingXLSX = async (job, showToast) => {
-  try {
-    showToast("Generating spreadsheet...");
-    const XLSX = await loadSheetJS();
-
-    const headers = [
-      "FeatureDescription", "SortOrderScreen", "InsideWidth", "InsideDrop",
-      "ArchitraveWidth", "ArchitraveDrop", "TreatmentWidth", "TreatmentDrop",
-      "ControlSide1", "WindowDepth", "LocationComments"
-    ];
-
-    const rows = [];
-    let sortOrder = 0;
-
-    const buildComments = (w, extraLines = []) => {
-      const parts = [];
-      const flags = [];
-      if (w.is_bay) flags.push("Bay Window");
-      if (w.sliding_door) flags.push("Sliding Door");
-      if (w.has_cornices) flags.push("Cornices");
-      if (w.wall_to_wall) flags.push("Wall to Wall");
-      if (flags.length) parts.push(flags.join(" | "));
-
-      const info = [];
-      if (w.opening) info.push(`Opening: ${w.opening}`);
-      if (w.operating_method) info.push(`Method: ${w.operating_method}`);
-      if (info.length) parts.push(info.join(" | "));
-
-      const surrounds = [];
-      const m = w.measurements || {};
-      if (m.left_wall_to_arch) surrounds.push(`Left Arch: ${m.left_wall_to_arch}`);
-      if (m.right_wall_to_arch) surrounds.push(`Right Arch: ${m.right_wall_to_arch}`);
-      if (m.arch_to_floor) surrounds.push(`Arch→Floor: ${m.arch_to_floor}`);
-      if (m.to_floor) surrounds.push(`${w.has_cornices ? "Cornice" : "Ceiling"}→Floor: ${m.to_floor}`);
-      if (surrounds.length) parts.push(surrounds.join(" | "));
-
-      if (w.is_bay) {
-        const bay = [];
-        if (m.bay_bulkhead_width) bay.push(`Bulkhead W: ${m.bay_bulkhead_width}`);
-        if (m.bay_bulkhead_height) bay.push(`Bulkhead H: ${m.bay_bulkhead_height}`);
-        if (m.bay_bulkhead_depth) bay.push(`Bulkhead D: ${m.bay_bulkhead_depth}`);
-        if (bay.length) parts.push(bay.join(" | "));
-      }
-
-      extraLines.forEach(l => parts.push(l));
-      if (w.comments) parts.push(`Notes: ${w.comments}`);
-      return parts.join("\n");
-    };
-
-    (job.windows || []).forEach((w) => {
-      sortOrder += 10;
-      const m = w.measurements || {};
-      const label = w.label || "Window";
-      const outsideW = m.outside_width;
-      const outsideD = m.outside_length;
-      const treatW = m.treatment_width;
-      const treatD = m.treatment_drop;
-      const controlSide = w.control_side || "";
-
-      const v = (val) => (val !== undefined && val !== null && val !== "") ? val : 0;
-
-      if (w.is_bay) {
-        const comments = buildComments(w);
-        const panels = [
-          { suffix: "A", width: m.bay_left_width, drop: m.bay_left_height },
-          { suffix: "B", width: m.bay_middle_width, drop: m.bay_middle_height },
-          { suffix: "C", width: m.bay_right_width, drop: m.bay_right_height },
-        ];
-        panels.forEach(({ suffix, width, drop }) => {
-          rows.push([
-            `${label}${suffix}`, sortOrder, v(width), v(drop),
-            v(outsideW), v(outsideD), v(treatW), v(treatD),
-            controlSide, 0, comments
-          ]);
-        });
-
-      } else if (w.sliding_door) {
-        const numPanels = parseInt(w.sliding_panels) || 1;
-        const cumulativeWidths = [];
-        for (let p = 1; p <= numPanels; p++) {
-          const val = parseFloat(m[`sliding_panel_${p}_width`]) || 0;
-          cumulativeWidths.push(val);
-        }
-        // Calculate individual panel widths from cumulative
-        const individualWidths = cumulativeWidths.map((cum, i) =>
-          i === 0 ? cum : cum - cumulativeWidths[i - 1]
-        );
-        const comments = buildComments(w,
-          [`Panels: ${numPanels}`, `Individual widths: ${individualWidths.join(", ")}`]
-        );
-        const suffixes = ["A", "B", "C", "D"];
-        individualWidths.forEach((width, i) => {
-          rows.push([
-            `${label}${suffixes[i]}`, sortOrder, v(width), v(m.sliding_height),
-            v(outsideW), v(outsideD), v(treatW), v(treatD),
-            controlSide, 0, comments
-          ]);
-        });
-
-      } else {
-        const comments = buildComments(w);
-        rows.push([
-          label, sortOrder, v(m.inside_width), v(m.inside_length),
-          v(outsideW), v(outsideD), v(treatW), v(treatD),
-          controlSide, 0, comments
-        ]);
-      }
-    });
-
-    const wsData = [headers, ...rows];
-    const ws = XLSX.utils.aoa_to_sheet(wsData);
-
-    // Column widths
-    ws["!cols"] = [
-      { wch: 20 }, { wch: 16 }, { wch: 12 }, { wch: 12 },
-      { wch: 16 }, { wch: 14 }, { wch: 14 }, { wch: 14 },
-      { wch: 12 }, { wch: 12 }, { wch: 50 }
-    ];
-
-    const wb = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(wb, ws, "Measurements");
-
-    const namePart = (job.lead_name || "measure").replace(/\s+/g, "_");
-    const addressPart = [job.street, job.suburb].filter(Boolean).join("_").replace(/\s+/g, "_");
-    const filename = `${namePart}${addressPart ? "_" + addressPart : ""}_Quoting.xlsx`;
-    XLSX.writeFile(wb, filename);
-    showToast("Spreadsheet downloaded ✓");
-  } catch (err) {
-    console.error("XLSX export error:", err);
-    showToast("Spreadsheet export failed");
-  }
-};
-
-// ============================================================
 // MAIN APP
 // ============================================================
 export default function App() {
@@ -1141,9 +994,6 @@ export default function App() {
   const [isOnline, setIsOnline] = useState(true);
   const [supabaseConnected, setSupabaseConnected] = useState(false);
   const [showSetup, setShowSetup] = useState(false);
-  const [syncSuccess, setSyncSuccess] = useState(null);
-  const [leads, setLeads] = useState([]);
-  const [showAddLead, setShowAddLead] = useState(false);
   const [showCompleteModal, setShowCompleteModal] = useState(false);
   const [editingUnlocked, setEditingUnlocked] = useState(false);
   const [lastRefresh, setLastRefresh] = useState(null);
@@ -1152,35 +1002,13 @@ export default function App() {
 
   const STATUS_OPTIONS = ["In Progress", "Approved", "Rejected", "Uncontactable", "Delayed"];
 
-  // Fetch ALL leads from Supabase (we filter in the dropdown)
-  const fetchLeads = async () => {
-    if (!SUPABASE_URL || !SUPABASE_ANON_KEY) return;
-    try {
-      const url = `${SUPABASE_URL}/rest/v1/leads?select=id,name,phone,email,street,suburb,postcode,status&order=name.asc`;
-      const res = await fetch(url, {
-        headers: {
-          apikey: SUPABASE_ANON_KEY,
-          Authorization: `Bearer ${SUPABASE_ANON_KEY}`,
-        },
-      });
-      if (!res.ok) {
-        console.error("Leads fetch failed:", res.status, await res.text());
-        return;
-      }
-      const data = await res.json();
-      if (Array.isArray(data)) setLeads(data);
-    } catch (err) {
-      console.error("Failed to fetch leads:", err);
-    }
-  };
-
   // Fetch jobs from Supabase and merge with local
-  // Shared function to rebuild jobs from Supabase (used by both auto-poll and manual refresh)
+  // Shared function to rebuild jobs from Supabase (used by manual refresh)
   const hardSyncFromSupabase = useCallback(async () => {
     if (!SUPABASE_URL || !SUPABASE_ANON_KEY) return;
     try {
       const res = await fetch(
-        `${SUPABASE_URL}/rest/v1/check_measures?select=*,leads(id,name,phone,email,street,suburb,postcode,status)&order=created_at.desc`,
+        `${SUPABASE_URL}/rest/v1/check_measures?select=*&order=created_at.desc`,
         {
           headers: {
             apikey: SUPABASE_ANON_KEY,
@@ -1206,36 +1034,27 @@ export default function App() {
 
         // Rebuild remote jobs, but skip ones that have pending local changes
         const remoteJobs = remoteRows.filter((row) => !unsyncedIds.has(row.id)).map((row) => {
-          const lead = row.leads || {};
-          // Handle both old format (array) and new format ({_meta, items})
           const rawWindows = row.windows;
           const windowsMeta = rawWindows?._meta || {};
           const windowData = Array.isArray(row.measurements_json) ? row.measurements_json
             : Array.isArray(rawWindows) ? rawWindows
             : Array.isArray(rawWindows?.items) ? rawWindows.items : [];
           const isJobCompleted = windowsMeta.is_completed || false;
-
-          // Check if we have local base64 photos to preserve
+          const jobStatus = windowsMeta.status || "In Progress";
           const localJob = prev.find((j) => j.id === row.id);
 
           const windows = windowData.map((rw) => {
             const lw = localJob?.windows?.find((l) => l.id === rw.id);
             const cloudMain = rw.main_photo_url || rw.main_photo || null;
             const cloudExtras = rw.extra_photo_urls || rw.extra_photos || [];
-
-            // Only keep local base64 if not yet uploaded
             const localMainIsBase64 = lw?.main_photo && lw.main_photo.startsWith("data:");
             const mainPhoto = localMainIsBase64 ? lw.main_photo : cloudMain;
-
             const mergedExtras = [...cloudExtras];
             if (lw?.extra_photos) {
               lw.extra_photos.forEach((lp) => {
                 if (lp && lp.startsWith("data:")) mergedExtras.push(lp);
               });
             }
-
-            // Also keep any local-only windows not in cloud yet
-            console.log("[POLL] Window:", rw.id?.substring(0, 8), "cloud_main:", cloudMain ? "YES" : "null", "cloud_extras:", cloudExtras.length, "display_main:", mainPhoto ? "YES" : "null", "display_extras:", mergedExtras.length);
             return {
               id: rw.id || genId(),
               label: rw.label || "Window",
@@ -1257,7 +1076,6 @@ export default function App() {
             };
           });
 
-          // Append local-only windows not yet synced
           if (localJob) {
             localJob.windows.forEach((lw) => {
               if (!windowData.find((rw) => rw.id === lw.id)) {
@@ -1268,14 +1086,13 @@ export default function App() {
 
           return {
             id: row.id,
-            lead_id: row.lead_id || null,
-            lead_name: lead.name || "",
-            phone: lead.phone || "",
-            email: lead.email || "",
-            street: lead.street || "",
-            suburb: lead.suburb || "",
-            postcode: lead.postcode || "",
-            status: lead.status || "In Progress",
+            lead_name: row.lead_name || "",
+            phone: row.phone || "",
+            email: row.email || "",
+            street: row.street || "",
+            suburb: row.suburb || "",
+            postcode: row.postcode || "",
+            status: jobStatus,
             is_completed: isJobCompleted,
             measure_date: row.measure_date || "",
             measure_time: row.measure_time || "",
@@ -1298,7 +1115,7 @@ export default function App() {
   // Manual refresh
   const manualRefresh = useCallback(async () => {
     setRefreshing(true);
-    await Promise.all([hardSyncFromSupabase(), fetchLeads()]);
+    await hardSyncFromSupabase();
     setRefreshing(false);
   }, [hardSyncFromSupabase]);
 
@@ -1310,7 +1127,6 @@ export default function App() {
     } catch {}
 
     hardSyncFromSupabase();
-    fetchLeads();
 
     setIsOnline(navigator.onLine);
     const on = () => setIsOnline(true);
@@ -1333,128 +1149,11 @@ export default function App() {
   }, [jobs]);
 
   // Auto-sync: debounce 3 seconds after any job becomes unsynced
-  const autoSyncTimer = useRef(null);
-  const prevJobsRef = useRef(jobs);
-  const isSyncing = useRef(false);
+  const jobsRef = useRef(jobs);
 
+  // Always keep jobsRef pointing to the latest jobs
   useEffect(() => {
-    const prevUnsynced = new Set(prevJobsRef.current.filter((j) => !j.synced).map((j) => j.id));
-    const allUnsynced = jobs.filter((j) => !j.synced);
-    prevJobsRef.current = jobs;
-
-    if (allUnsynced.length === 0) { isSyncing.current = false; return; }
-    if (!SUPABASE_URL || !SUPABASE_ANON_KEY) return;
-
-    // Lock immediately to prevent poll from overwriting during the 3-second wait
-    isSyncing.current = true;
-
-    clearTimeout(autoSyncTimer.current);
-    autoSyncTimer.current = setTimeout(async () => {
-      // Re-read jobs from the ref to get the LATEST state, not the stale closure
-      const currentJobs = prevJobsRef.current;
-      const latestUnsynced = currentJobs.filter((j) => !j.synced);
-      if (latestUnsynced.length === 0) { isSyncing.current = false; return; }
-
-      for (const job of latestUnsynced) {
-        try {
-          // Upload any base64 photos to Supabase Storage
-          const windowsSummary = [];
-          for (const w of job.windows) {
-            let mainPhotoUrl = w.main_photo_url || null;
-            const extraPhotoUrls = [...(w.extra_photo_urls || [])];
-
-            console.log("[AUTO-SYNC] Window:", w.id, "main_photo type:", w.main_photo?.substring(0, 30), "extra_photos count:", w.extra_photos?.length || 0);
-
-            // Upload main photo if base64
-            if (w.main_photo && w.main_photo.startsWith("data:")) {
-              console.log("[AUTO-SYNC] Uploading main photo for window", w.id);
-              const ts = Date.now();
-              const url = await uploadPhoto(w.main_photo, `${job.id}/${w.id}/main_${ts}.jpg`);              if (url) mainPhotoUrl = url;
-            }
-
-            // Upload extra photos if base64
-            for (let i = 0; i < (w.extra_photos?.length || 0); i++) {
-              if (w.extra_photos[i] && w.extra_photos[i].startsWith("data:")) {
-                console.log("[AUTO-SYNC] Uploading extra photo", i, "for window", w.id);
-                const ets = Date.now();
-                const url = await uploadPhoto(w.extra_photos[i], `${job.id}/${w.id}/extra_${i}_${ets}.jpg`);
-                if (url) extraPhotoUrls[i] = url;
-              } else if (w.extra_photos[i] && !w.extra_photos[i].startsWith("data:")) {
-                // Already a URL, keep it
-                extraPhotoUrls[i] = w.extra_photos[i];
-              }
-            }
-
-            console.log("[AUTO-SYNC] Final URLs - main:", mainPhotoUrl?.substring(0, 50), "extras:", extraPhotoUrls.length);
-
-            windowsSummary.push({
-              id: w.id,
-              label: w.label,
-              treatments: w.treatments || [],
-              is_bay: w.is_bay || false,
-              sliding_door: w.sliding_door || false,
-              sliding_panels: w.sliding_panels || "",
-              has_cornices: w.has_cornices || false,
-              wall_to_wall: w.wall_to_wall || false,
-              opening: w.opening || "",
-              operating_method: w.operating_method || "",
-              control_side: w.control_side || "",
-              measurements: w.measurements,
-              comments: w.comments,
-              main_photo_url: mainPhotoUrl,
-              extra_photo_urls: extraPhotoUrls,
-            });
-          }
-
-          const payload = {
-            id: job.id,
-            lead_id: job.lead_id || null,
-            measure_date: job.measure_date || null,
-            measure_time: job.measure_time || null,
-            windows: { _meta: { is_completed: job.is_completed || false }, items: windowsSummary },
-            measurements_json: windowsSummary,
-            created_at: job.created_at,
-          };
-
-          console.log("[AUTO-SYNC] Syncing job:", job.id, "lead_id:", payload.lead_id, "lead_name:", job.lead_name, "windows:", windowsSummary.length);
-
-          const res = await fetch(`${SUPABASE_URL}/rest/v1/check_measures`, {
-            method: "POST",
-            headers: {
-              apikey: SUPABASE_ANON_KEY,
-              Authorization: `Bearer ${SUPABASE_ANON_KEY}`,
-              "Content-Type": "application/json",
-              Prefer: "return=representation,resolution=merge-duplicates",
-            },
-            body: JSON.stringify(payload),
-          });
-
-          if (res.ok) {
-            // Update local jobs: replace base64 with cloud URLs in BOTH arrays
-            setJobs((prev) => prev.map((j) => {
-              if (j.id !== job.id) return j;
-              const updatedWindows = j.windows.map((w) => {
-                const summary = windowsSummary.find((s) => s.id === w.id);
-                if (!summary) return w;
-                return {
-                  ...w,
-                  main_photo: summary.main_photo_url || w.main_photo,
-                  main_photo_url: summary.main_photo_url || w.main_photo_url || null,
-                  extra_photos: summary.extra_photo_urls.length > 0 ? summary.extra_photo_urls : w.extra_photos,
-                  extra_photo_urls: summary.extra_photo_urls,
-                };
-              });
-              return { ...j, windows: updatedWindows, synced: true };
-            }));
-          }
-        } catch (err) {
-          console.error("Auto-sync failed for job:", job.id, err);
-        }
-      }
-      isSyncing.current = false;
-    }, 3000);
-
-    return () => clearTimeout(autoSyncTimer.current);
+    jobsRef.current = jobs;
   }, [jobs]);
 
   // Scroll to top on screen change
@@ -1493,7 +1192,6 @@ export default function App() {
   const createJob = () => {
     const newJob = {
       id: genId(),
-      lead_id: null,
       lead_name: "",
       phone: "",
       email: "",
@@ -1512,77 +1210,13 @@ export default function App() {
     setScreen("job");
   };
 
-  const selectLead = (leadId) => {
-    const lead = leads.find((l) => String(l.id) === String(leadId));
-    if (!lead) {
-      console.warn("Lead not found. ID:", leadId, "Available:", leads.map(l => ({ id: l.id, name: l.name })));
-      return;
-    }
-    if (!currentJob) return;
-    updateJob(currentJob.id, {
-      lead_id: lead.id,
-      lead_name: lead.name || "",
-      phone: lead.phone || "",
-      email: lead.email || "",
-      street: lead.street || "",
-      suburb: lead.suburb || "",
-      postcode: lead.postcode || "",
-      status: lead.status || "In Progress",
-    });
-  };
 
   const updateJob = (id, updates) => {
     setJobs((prev) => prev.map((j) => (j.id === id ? { ...j, ...updates, synced: false } : j)));
   };
 
-  // Map local job fields to leads table column names
-  const LEAD_FIELD_MAP = {
-    lead_name: "name",
-    phone: "phone",
-    email: "email",
-    street: "street",
-    suburb: "suburb",
-    postcode: "postcode",
-    measure_date: "cm_date",
-    status: "status",
-  };
 
-  // Debounce timer ref for lead updates
-  const leadUpdateTimer = useRef(null);
 
-  const updateLeadField = (jobId, field, value) => {
-    // Update local job immediately
-    updateJob(jobId, { [field]: value });
-
-    // Debounce the Supabase update (wait 800ms after last keystroke)
-    const job = jobs.find((j) => j.id === jobId);
-    const leadId = job?.lead_id;
-    if (!leadId || !SUPABASE_URL || !SUPABASE_ANON_KEY) return;
-
-    const supabaseCol = LEAD_FIELD_MAP[field];
-    if (!supabaseCol) return;
-
-    clearTimeout(leadUpdateTimer.current);
-    leadUpdateTimer.current = setTimeout(async () => {
-      try {
-        const res = await fetch(
-          `${SUPABASE_URL}/rest/v1/leads?id=eq.${leadId}`,
-          {
-            method: "PATCH",
-            headers: {
-              apikey: SUPABASE_ANON_KEY,
-              Authorization: `Bearer ${SUPABASE_ANON_KEY}`,
-              "Content-Type": "application/json",
-            },
-            body: JSON.stringify({ [supabaseCol]: value }),
-          }
-        );
-        if (!res.ok) console.error("Lead update failed:", res.status);
-      } catch (err) {
-        console.error("Lead update error:", err);
-      }
-    }, 800);
-  };
 
   const deleteJob = async (id) => {
     setJobs((prev) => prev.filter((j) => j.id !== id));
@@ -1705,12 +1339,19 @@ export default function App() {
   };
 
   const syncJob = async (jobId) => {
-    const job = jobs.find((j) => j.id === jobId);
-    if (!job) return;
+    // Get the absolute latest state by reading from a state callback
+    const job = await new Promise((resolve) => {
+      setJobs((prev) => {
+        resolve(prev.find((j) => j.id === jobId) || null);
+        return prev; // don't modify state
+      });
+    });
+    if (!job) { console.error("[SYNC] Job not found:", jobId); return; }
     if (!SUPABASE_URL || !SUPABASE_ANON_KEY) {
       setShowSetup(true);
       return;
     }
+    console.log("[SYNC] Starting sync for job:", jobId, "lead_name:", job.lead_name);
     try {
       // Upload photos for each window
       const windowsSummary = [];
@@ -1756,13 +1397,20 @@ export default function App() {
 
       const payload = {
         id: job.id,
-        lead_id: job.lead_id || null,
+        lead_name: job.lead_name || null,
+        phone: job.phone || null,
+        email: job.email || null,
+        street: job.street || null,
+        suburb: job.suburb || null,
+        postcode: job.postcode || null,
         measure_date: job.measure_date || null,
         measure_time: job.measure_time || null,
-        windows: { _meta: { is_completed: job.is_completed || false }, items: windowsSummary },
+        windows: { _meta: { is_completed: job.is_completed || false, status: job.status || "In Progress" }, items: windowsSummary },
         measurements_json: windowsSummary,
         created_at: job.created_at,
       };
+
+      console.log("[SYNC] Saving job:", job.id, "lead_name:", payload.lead_name);
 
       // Use upsert so re-syncing the same job doesn't fail
       const res = await fetch(`${SUPABASE_URL}/rest/v1/check_measures`, {
@@ -1799,8 +1447,7 @@ export default function App() {
         return { ...j, windows: updatedWindows, synced: true };
       }));
       setSupabaseConnected(true);
-      setSyncSuccess(job.lead_name || "Job");
-      setTimeout(() => setSyncSuccess(null), 2500);
+      showToast("Saved ✓");
     } catch (err) {
       console.error("Sync error:", err);
       showToast("Sync failed — check console for details");
@@ -1893,11 +1540,6 @@ export default function App() {
                             <div className="job-name">{job.lead_name || "Untitled Lead"}</div>
                             <div className="job-address">{[job.street, job.suburb, job.postcode].filter(Boolean).join(", ") || "No address"}</div>
                             <div style={{ marginTop: 4, display: "flex", gap: 6, flexWrap: "wrap" }}>
-                              {job.synced ? (
-                                <span className="pill pill-synced"><Icons.Check size={10} /> Synced</span>
-                              ) : (
-                                <span className="pill pill-local">Local only</span>
-                              )}
                               {job.is_completed ? (
                                 <span className="pill" style={{ background: "var(--accent-bg)", color: "var(--accent)" }}><Icons.Check size={10} /> Completed</span>
                               ) : (
@@ -1967,33 +1609,29 @@ export default function App() {
               </button>
               <div style={{ flex: 1 }} />
               <div className="header-actions">
-                {isHistory ? (
-                  <span className={`pill ${getStatusPillClass(currentJob.status)}`}>{currentJob.status}</span>
+                {isCompleted && !editingUnlocked && (
+                  <span className="pill pill-synced" style={{ background: "var(--accent-bg)", color: "var(--accent)" }}>
+                    <Icons.Check size={10} /> Completed
+                  </span>
+                )}
+                {editingUnlocked && (
+                  <span className="pill" style={{ background: "#FFF7ED", color: "#C2410C" }}>
+                    Editing
+                  </span>
+                )}
+                {currentJob.synced ? (
+                  <span className="pill pill-synced"><Icons.Check size={10} /> Saved</span>
                 ) : (
-                  <>
-                    {isCompleted && !editingUnlocked && (
-                      <span className="pill pill-synced" style={{ background: "var(--accent-bg)", color: "var(--accent)" }}>
-                        <Icons.Check size={10} /> Completed
-                      </span>
-                    )}
-                    {editingUnlocked && (
-                      <span className="pill pill-local" style={{ background: "#FFF7ED", color: "#C2410C" }}>
-                        Editing
-                      </span>
-                    )}
-                    {!isCompleted && !editingUnlocked && (
-                      <>
-                        {currentJob.synced ? (
-                          <span className="pill pill-synced"><Icons.Check size={12} /> Synced</span>
-                        ) : (
-                          <span className="pill pill-local">Local</span>
-                        )}
-                      </>
-                    )}
-                    <button className="btn btn-ghost" onClick={() => syncJob(currentJob.id)} title="Sync to Supabase">
-                      <Icons.Cloud size={18} />
-                    </button>
-                  </>
+                  <span className="pill pill-local">Local</span>
+                )}
+                {!isLocked && (
+                  <button
+                    className="btn"
+                    style={{ padding: "6px 16px", fontSize: 13, fontWeight: 700, background: "var(--accent)", color: "#fff", border: "none", borderRadius: 8 }}
+                    onClick={() => syncJob(currentJob.id)}
+                  >
+                    Save
+                  </button>
                 )}
               </div>
             </div>
@@ -2004,41 +1642,13 @@ export default function App() {
                 <div className="card" style={{ marginBottom: 16 }}>
                   <div className="card-body">
                     <div className="field">
-                      <label className="field-label">Select Lead</label>
-                      <div style={{ display: "flex", gap: 8 }}>
-                        <select
-                          className="field-input"
-                          style={{ flex: 1 }}
-                          value={currentJob.lead_id || ""}
-                          disabled={isLocked}
-                          onChange={(e) => {
-                            if (e.target.value) selectLead(e.target.value);
-                          }}
-                        >
-                          <option value="">— Choose a lead —</option>
-                          {leads.filter((l) => l.status === "In Progress" || String(l.id) === String(currentJob.lead_id)).map((lead) => (
-                            <option key={lead.id} value={lead.id}>{lead.name}</option>
-                          ))}
-                        </select>
-                        {!currentJob.lead_id && !isLocked && (
-                          <button
-                            className="btn btn-primary"
-                            style={{ flexShrink: 0, padding: "10px 14px" }}
-                            onClick={() => setShowAddLead(true)}
-                          >
-                            <Icons.Plus size={16} />
-                          </button>
-                        )}
-                      </div>
-                    </div>
-                    <div className="field">
-                      <label className="field-label">Lead Name</label>
+                      <label className="field-label">Name</label>
                       <input
                         className="field-input"
-                        placeholder="Auto-filled from lead"
+                        placeholder="Customer name"
                         value={currentJob.lead_name}
                         disabled={isLocked}
-                        onChange={(e) => updateLeadField(currentJob.id, "lead_name", e.target.value)}
+                        onChange={(e) => updateJob(currentJob.id, { lead_name: e.target.value })}
                       />
                     </div>
                     <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
@@ -2047,10 +1657,10 @@ export default function App() {
                         <input
                           className="field-input"
                           type="tel"
-                          placeholder="Auto-filled"
+                          placeholder="Phone number"
                           value={currentJob.phone}
                           disabled={isLocked}
-                          onChange={(e) => updateLeadField(currentJob.id, "phone", e.target.value)}
+                          onChange={(e) => updateJob(currentJob.id, { phone: e.target.value })}
                         />
                       </div>
                       <div className="field">
@@ -2058,10 +1668,10 @@ export default function App() {
                         <input
                           className="field-input"
                           type="email"
-                          placeholder="Auto-filled"
+                          placeholder="Email"
                           value={currentJob.email || ""}
                           disabled={isLocked}
-                          onChange={(e) => updateLeadField(currentJob.id, "email", e.target.value)}
+                          onChange={(e) => updateJob(currentJob.id, { email: e.target.value })}
                         />
                       </div>
                     </div>
@@ -2072,7 +1682,7 @@ export default function App() {
                         placeholder="e.g. 42 Brunswick St"
                         value={currentJob.street || ""}
                         disabled={isLocked}
-                        onChange={(e) => updateLeadField(currentJob.id, "street", e.target.value)}
+                        onChange={(e) => updateJob(currentJob.id, { street: e.target.value })}
                       />
                     </div>
                     <div style={{ display: "grid", gridTemplateColumns: "2fr 1fr", gap: 12 }}>
@@ -2083,7 +1693,7 @@ export default function App() {
                           placeholder="e.g. Fitzroy"
                           value={currentJob.suburb || ""}
                           disabled={isLocked}
-                          onChange={(e) => updateLeadField(currentJob.id, "suburb", e.target.value)}
+                          onChange={(e) => updateJob(currentJob.id, { suburb: e.target.value })}
                         />
                       </div>
                       <div className="field">
@@ -2093,7 +1703,7 @@ export default function App() {
                           placeholder="3065"
                           value={currentJob.postcode || ""}
                           disabled={isLocked}
-                          onChange={(e) => updateLeadField(currentJob.id, "postcode", e.target.value)}
+                          onChange={(e) => updateJob(currentJob.id, { postcode: e.target.value })}
                         />
                       </div>
                     </div>
@@ -2103,7 +1713,7 @@ export default function App() {
                         className="field-input"
                         value={currentJob.status || "In Progress"}
                         disabled={isLocked}
-                        onChange={(e) => updateLeadField(currentJob.id, "status", e.target.value)}
+                        onChange={(e) => updateJob(currentJob.id, { status: e.target.value })}
                       >
                         {STATUS_OPTIONS.map((s) => (
                           <option key={s} value={s}>{s}</option>
@@ -2118,7 +1728,7 @@ export default function App() {
                           type="date"
                           value={currentJob.measure_date}
                           disabled={isLocked}
-                          onChange={(e) => updateLeadField(currentJob.id, "measure_date", e.target.value)}
+                          onChange={(e) => updateJob(currentJob.id, { measure_date: e.target.value })}
                         />
                       </div>
                       <div className="field">
@@ -2163,9 +1773,19 @@ export default function App() {
                         <div className="window-info">
                           <div className="window-label">{win.label}</div>
                           <div className="window-dims">
-                            {win.measurements.inside_width && win.measurements.inside_length
-                              ? `${win.measurements.inside_width} × ${win.measurements.inside_length}mm`
-                              : "No measurements yet"}
+                            {(() => {
+                              const m = win.measurements || {};
+                              if (win.is_bay) {
+                                return m.bay_left_width || m.bay_middle_width ? `Bay: ${[m.bay_left_width, m.bay_middle_width, m.bay_right_width].filter(Boolean).join(" / ")}mm` : "No measurements yet";
+                              }
+                              if (win.sliding_door) {
+                                return m.sliding_height ? `Sliding: ${m.sliding_height}mm H` : "No measurements yet";
+                              }
+                              if (m.inside_width || m.outside_width) {
+                                return `${m.inside_width || "—"} × ${m.inside_length || "—"}mm`;
+                              }
+                              return "No measurements yet";
+                            })()}
                           </div>
                         </div>
                         <Icons.ChevronRight size={18} color="var(--warm-200)" />
@@ -2233,16 +1853,6 @@ export default function App() {
                   <Icons.Download size={16} /> Export PDF
                 </button>
 
-                {isCompleted && !editingUnlocked && (
-                  <button
-                    className="btn btn-block"
-                    style={{ marginBottom: 8, background: "#e8f5e9", color: "#2e7d32", border: "1.5px solid #a5d6a7", fontWeight: 600 }}
-                    onClick={() => exportQuotingXLSX(currentJob, showToast)}
-                  >
-                    <Icons.Download size={16} /> Export Excel
-                  </button>
-                )}
-
                 {!isLocked && !isHistory && (
                   <button className="btn btn-danger btn-block" style={{ marginTop: 8 }} onClick={() => {
                     if (confirm("Delete this entire job?")) deleteJob(currentJob.id);
@@ -2266,6 +1876,7 @@ export default function App() {
             onUpdate={(updates) => updateWindow(currentWindowIdx, updates)}
             onDelete={() => deleteWindow(currentWindowIdx)}
             onDeletePhoto={deletePhotoFromStorage}
+            onSave={() => syncJob(currentJob.id)}
             readOnly={isLocked}
             onNext={() => {
               if (currentWindowIdx < currentJob.windows.length - 1) {
@@ -2289,47 +1900,9 @@ export default function App() {
         )}
 
         {/* Sync Success Overlay */}
-        {syncSuccess && (
-          <div className="sync-overlay" onClick={() => setSyncSuccess(null)}>
-            <div className="sync-overlay-card" onClick={(e) => e.stopPropagation()}>
-              <div className="sync-check-circle">
-                <Icons.Check size={32} />
-              </div>
-              <div className="sync-overlay-title">Synced to Cloud</div>
-              <div className="sync-overlay-desc">
-                {syncSuccess}'s measurements have been saved to Supabase successfully.
-              </div>
-              <button className="btn btn-primary btn-block" style={{ marginTop: 20 }} onClick={() => setSyncSuccess(null)}>
-                Done
-              </button>
-            </div>
-          </div>
-        )}
-
         {/* Setup Modal */}
         {showSetup && (
           <SetupModal onClose={() => setShowSetup(false)} />
-        )}
-
-        {showAddLead && (
-          <AddLeadModal
-            onClose={() => setShowAddLead(false)}
-            onSaved={(newLead) => {
-              setLeads((prev) => [...prev, newLead].sort((a, b) => (a.name || "").localeCompare(b.name || "")));
-              if (currentJob) {
-                updateJob(currentJob.id, {
-                  lead_id: newLead.id,
-                  lead_name: newLead.name || "",
-                  phone: newLead.phone || "",
-                  email: newLead.email || "",
-                  street: newLead.street || "",
-                  suburb: newLead.suburb || "",
-                  postcode: newLead.postcode || "",
-                });
-              }
-              showToast("Lead added ✓");
-            }}
-          />
         )}
 
         {/* Complete Check Measure Modal */}
@@ -2392,6 +1965,7 @@ export default function App() {
             </div>
           </div>
         )}
+
       </div>
     </>
   );
@@ -2400,7 +1974,7 @@ export default function App() {
 // ============================================================
 // WINDOW DETAIL VIEW
 // ============================================================
-function WindowDetail({ job, window: win, windowIdx, totalWindows, onBack, onUpdate, onDelete, onDeletePhoto, readOnly, onNext, onPrev, showToast }) {
+function WindowDetail({ job, window: win, windowIdx, totalWindows, onBack, onUpdate, onDelete, onDeletePhoto, onSave, readOnly, onNext, onPrev, showToast }) {
   const mainPhotoRef = useRef(null);
   const extraPhotoRef = useRef(null);
   const scrollRef = useRef(null);
@@ -2455,12 +2029,21 @@ function WindowDetail({ job, window: win, windowIdx, totalWindows, onBack, onUpd
             {windowIdx + 1} of {totalWindows}
           </span>
           {job.synced ? (
-            <span className="pill pill-synced" style={{ fontSize: 10, padding: "2px 8px" }}><Icons.Check size={10} /> Synced</span>
+            <span className="pill pill-synced" style={{ fontSize: 10, padding: "2px 8px" }}><Icons.Check size={10} /> Saved</span>
           ) : (
-            <span className="pill pill-local" style={{ fontSize: 10, padding: "2px 8px" }}>Saving...</span>
+            <span className="pill pill-local" style={{ fontSize: 10, padding: "2px 8px" }}>Local</span>
           )}
         </div>
         <div className="header-actions">
+          {!readOnly && (
+            <button
+              className="btn"
+              style={{ padding: "4px 14px", fontSize: 12, fontWeight: 700, background: "var(--accent)", color: "#fff", border: "none", borderRadius: 8, marginRight: 4 }}
+              onClick={onSave}
+            >
+              Save
+            </button>
+          )}
           <button className="btn btn-ghost" disabled={windowIdx === 0} onClick={onPrev}>
             <Icons.ChevronLeft size={18} />
           </button>
@@ -3148,170 +2731,7 @@ VITE_SUPABASE_ANON_KEY=your-anon-key-here`}</pre>
 // ============================================================
 // ADD LEAD MODAL
 // ============================================================
-const ADD_LEAD_SOURCES = ["Referral","Previous Customer","Facebook","Website Form","Phone Call","Walk In","Shows & Exhibition","Trade Customer","Call & Online","Trade & Repeat"];
-const ADD_LEAD_STATUSES = ["In Progress","Approved","Rejected","Uncontactable","Delayed"];
-const ADD_LEAD_WARMTH = ["","Unlikely","Likely","Verbally Approved"];
 
-const emptyLead = () => ({
-  name: "", email: "", phone: "",
-  street: "", suburb: "", postcode: "",
-  source: ADD_LEAD_SOURCES[0],
-  status: ADD_LEAD_STATUSES[0],
-  warmth: "",
-  first_contact: new Date().toISOString().split("T")[0],
-  next_contact: "", quote_value: "", quote_number: "",
-  book_number: "", cm_date: "", quote_sent_date: "",
-  brief_note: "", detailed_note: "", notes: [],
-});
-
-function AddLeadModal({ onClose, onSaved }) {
-  const [form, setForm] = useState(emptyLead());
-  const [saving, setSaving] = useState(false);
-  const [error, setError] = useState(null);
-  const set = (k, v) => setForm((f) => ({ ...f, [k]: v }));
-
-  const handleSave = async () => {
-    if (!form.name.trim()) { setError("Lead name is required."); return; }
-    setSaving(true);
-    setError(null);
-    try {
-      const cleaned = { ...form };
-      ["first_contact","next_contact","cm_date","quote_sent_date","approved_date","rejected_date"].forEach((k) => {
-        if (cleaned[k] === "" || cleaned[k] === undefined) cleaned[k] = null;
-      });
-      if (cleaned.quote_value === "" || cleaned.quote_value === undefined) cleaned.quote_value = null;
-      if (Array.isArray(cleaned.notes)) cleaned.notes = JSON.stringify(cleaned.notes);
-
-      const res = await fetch(`${SUPABASE_URL}/rest/v1/leads`, {
-        method: "POST",
-        headers: {
-          apikey: SUPABASE_ANON_KEY,
-          Authorization: `Bearer ${SUPABASE_ANON_KEY}`,
-          "Content-Type": "application/json",
-          Prefer: "return=representation",
-        },
-        body: JSON.stringify(cleaned),
-      });
-      if (!res.ok) throw new Error("Insert failed");
-      const result = await res.json();
-      const newLead = Array.isArray(result) ? result[0] : result;
-      if (onSaved) onSaved(newLead);
-      onClose();
-    } catch (e) {
-      setError("Failed to save. Check your Supabase connection.");
-    }
-    setSaving(false);
-  };
-
-  return (
-    <div style={{
-      position: "fixed", inset: 0, background: "rgba(0,0,0,0.5)", zIndex: 200,
-      display: "flex", alignItems: "center", justifyContent: "center", padding: 16,
-    }} onClick={onClose}>
-      <div style={{
-        background: "#fff", borderRadius: 16, maxWidth: 560, width: "100%",
-        maxHeight: "90vh", overflowY: "auto", padding: 0,
-      }} onClick={(e) => e.stopPropagation()}>
-
-        {/* Header */}
-        <div style={{ padding: "20px 24px 16px", borderBottom: "1px solid var(--warm-100)", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-          <div>
-            <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: "0.1em", color: "var(--warm-300)", textTransform: "uppercase", marginBottom: 4 }}>New Lead</div>
-            <input
-              value={form.name}
-              onChange={(e) => set("name", e.target.value)}
-              placeholder="e.g. Smith Residence"
-              style={{ fontSize: 20, fontWeight: 700, color: "var(--ink)", border: "none", outline: "none", width: "100%", fontFamily: "var(--font-body)", background: "transparent" }}
-            />
-          </div>
-          <button className="btn btn-ghost" onClick={onClose}><Icons.X size={20} /></button>
-        </div>
-
-        {/* Form */}
-        <div style={{ padding: "20px 24px" }}>
-          <div className="section-title" style={{ padding: "0 0 12px" }}>Contact Details</div>
-
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
-            <div className="field">
-              <label className="field-label">Phone</label>
-              <input className="field-input" value={form.phone} onChange={(e) => set("phone", e.target.value)} />
-            </div>
-            <div className="field">
-              <label className="field-label">Email</label>
-              <input className="field-input" type="email" value={form.email} onChange={(e) => set("email", e.target.value)} />
-            </div>
-          </div>
-
-          <div className="field">
-            <label className="field-label">Street</label>
-            <input className="field-input" value={form.street} onChange={(e) => set("street", e.target.value)} placeholder="e.g. 42 Example Street" />
-          </div>
-
-          <div style={{ display: "grid", gridTemplateColumns: "2fr 1fr", gap: 12 }}>
-            <div className="field">
-              <label className="field-label">Suburb</label>
-              <input className="field-input" value={form.suburb} onChange={(e) => set("suburb", e.target.value)} />
-            </div>
-            <div className="field">
-              <label className="field-label">Postcode</label>
-              <input className="field-input" value={form.postcode} onChange={(e) => set("postcode", e.target.value)} />
-            </div>
-          </div>
-
-          <div className="divider" />
-          <div className="section-title" style={{ padding: "0 0 12px" }}>Lead Details</div>
-
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
-            <div className="field">
-              <label className="field-label">Source</label>
-              <select className="field-input" value={form.source} onChange={(e) => set("source", e.target.value)}>
-                {ADD_LEAD_SOURCES.map((s) => <option key={s}>{s}</option>)}
-              </select>
-            </div>
-            <div className="field">
-              <label className="field-label">Warmth</label>
-              <select className="field-input" value={form.warmth} onChange={(e) => set("warmth", e.target.value)}>
-                {ADD_LEAD_WARMTH.map((s) => <option key={s} value={s}>{s || "—"}</option>)}
-              </select>
-            </div>
-          </div>
-
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
-            <div className="field">
-              <label className="field-label">First Contact</label>
-              <input className="field-input" type="date" value={form.first_contact} onChange={(e) => set("first_contact", e.target.value)} />
-            </div>
-            <div className="field">
-              <label className="field-label">Quote Value ($)</label>
-              <input className="field-input" type="number" value={form.quote_value} onChange={(e) => set("quote_value", e.target.value)} placeholder="Optional" />
-            </div>
-          </div>
-
-          <div className="field">
-            <label className="field-label">Brief Note</label>
-            <input className="field-input" value={form.brief_note} onChange={(e) => set("brief_note", e.target.value)} placeholder="One-line summary" />
-          </div>
-
-          {error && (
-            <div style={{ background: "var(--danger-bg)", border: "1px solid #fecaca", borderRadius: 8, padding: "10px 14px", color: "var(--danger)", fontSize: 13, marginBottom: 16 }}>
-              {error}
-            </div>
-          )}
-        </div>
-
-        {/* Footer */}
-        <div style={{ padding: "12px 24px 24px", display: "flex", justifyContent: "flex-end", gap: 10 }}>
-          <button className="btn btn-secondary" onClick={onClose}>Cancel</button>
-          <button className="btn btn-primary" onClick={handleSave} disabled={saving}>
-            {saving ? "Saving…" : "Save Lead"}
-          </button>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-// ============================================================
 // DRAWING EDITOR
 // ============================================================
 const DRAW_COLORS = ["#EF4444", "#8DC73F", "#3B82F6", "#F59E0B", "#FFFFFF", "#000000"];

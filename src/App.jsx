@@ -593,6 +593,117 @@ const compressImage = (dataUrl, maxWidth = 1200, quality = 0.7) => new Promise((
 });
 
 // ============================================================
+// DBS EXCEL EXPORT
+// ============================================================
+const loadSheetJS = () => {
+  return new Promise((resolve, reject) => {
+    if (window.XLSX) return resolve(window.XLSX);
+    const s = document.createElement("script");
+    s.src = "https://cdn.sheetjs.com/xlsx-0.20.3/package/dist/xlsx.full.min.js";
+    s.onload = () => resolve(window.XLSX);
+    s.onerror = reject;
+    document.head.appendChild(s);
+  });
+};
+
+const exportJobDBS = async (job, showToast) => {
+  try {
+    showToast("Generating Excel...");
+    const XLSX = await loadSheetJS();
+
+    const rows = [];
+    let sortOrder = 10;
+
+    for (const w of job.windows) {
+      const m = w.measurements || {};
+      const loc = w.label || "Window";
+
+      if (w.is_bay) {
+        // Bay window: 3 rows (A/B/C) for Left/Middle/Right
+        const sections = [
+          { suffix: "A", h: m.bay_left_height, w: m.bay_left_width },
+          { suffix: "B", h: m.bay_middle_height, w: m.bay_middle_width },
+          { suffix: "C", h: m.bay_right_height, w: m.bay_right_width },
+        ];
+        for (const sec of sections) {
+          rows.push({
+            FeatureDescription: `${loc} ${sec.suffix}`,
+            SortOrderScreen: sortOrder,
+            InsideWidth: Number(sec.w) || 0,
+            InsideDrop: Number(sec.h) || 0,
+            ArchitraveWidth: 0,
+            ArchitraveDrop: Number(m.arch_to_floor) || 0,
+            TreatmentWidth: Number(m.treatment_width) || 0,
+            TreatmentDrop: Number(m.treatment_drop) || 0,
+            ControlSide1: (w.control_side || "").charAt(0).toUpperCase() + (w.control_side || "").slice(1),
+            WindowDepth: Number(m.bay_bulkhead_depth) || 0,
+            LocationComments: w.comments || "",
+          });
+          sortOrder += 10;
+        }
+      } else if (w.sliding_door) {
+        // Sliding door: one row per panel with cumulative→individual widths
+        const numPanels = parseInt(w.sliding_panels) || 1;
+        const cumulativeWidths = [];
+        for (let p = numPanels; p >= 1; p--) {
+          cumulativeWidths.push(Number(m[`sliding_panel_${p}_width`]) || 0);
+        }
+        // Convert cumulative to individual: P1-4=3000, P1-3=2200, P1-2=1500, P1=800
+        // Individual: P4=3000-2200=800, P3=2200-1500=700, P2=1500-800=700, P1=800
+        const individualWidths = cumulativeWidths.map((cw, i) => {
+          return i === cumulativeWidths.length - 1 ? cw : cw - (cumulativeWidths[i + 1] || 0);
+        });
+
+        individualWidths.forEach((pw, i) => {
+          rows.push({
+            FeatureDescription: `${loc} Panel ${numPanels - i}`,
+            SortOrderScreen: sortOrder,
+            InsideWidth: pw,
+            InsideDrop: Number(m.sliding_height) || 0,
+            ArchitraveWidth: 0,
+            ArchitraveDrop: Number(m.arch_to_floor) || 0,
+            TreatmentWidth: Number(m.treatment_width) || 0,
+            TreatmentDrop: Number(m.treatment_drop) || 0,
+            ControlSide1: (w.control_side || "").charAt(0).toUpperCase() + (w.control_side || "").slice(1),
+            WindowDepth: 0,
+            LocationComments: w.comments || "",
+          });
+          sortOrder += 10;
+        });
+      } else {
+        // Standard window: one row
+        rows.push({
+          FeatureDescription: loc,
+          SortOrderScreen: sortOrder,
+          InsideWidth: Number(m.inside_width) || 0,
+          InsideDrop: Number(m.inside_length) || 0,
+          ArchitraveWidth: Number(m.outside_width) || 0,
+          ArchitraveDrop: Number(m.arch_to_floor) || 0,
+          TreatmentWidth: Number(m.treatment_width) || 0,
+          TreatmentDrop: Number(m.treatment_drop) || 0,
+          ControlSide1: (w.control_side || "").charAt(0).toUpperCase() + (w.control_side || "").slice(1),
+          WindowDepth: 0,
+          LocationComments: w.comments || "",
+        });
+        sortOrder += 10;
+      }
+    }
+
+    const ws = XLSX.utils.json_to_sheet(rows);
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, "Measurements");
+
+    const namePart = (job.lead_name || "measure").replace(/\s+/g, "_");
+    const addrPart = (job.street || "").replace(/\s+/g, "_");
+    XLSX.writeFile(wb, `${namePart}_${addrPart}_DBS.xlsx`);
+    showToast("Excel exported ✓");
+  } catch (err) {
+    console.error("DBS export error:", err);
+    showToast("Export failed — check console");
+  }
+};
+
+// ============================================================
 // PDF EXPORT
 // ============================================================
 const LOGO_DATA_URL = "/favicon.png";
@@ -1829,7 +1940,8 @@ export default function App() {
                         onClick={() => {
                           updateJob(currentJob.id, { is_completed: true });
                           setEditingUnlocked(false);
-                          showToast("Check measure locked ✓");
+                          setTimeout(() => syncJob(currentJob.id), 300);
+                          showToast("Check measure locked & saved ✓");
                         }}
                       >
                         <Icons.Check size={18} /> Save & Lock
@@ -1852,6 +1964,12 @@ export default function App() {
                 <button className="btn btn-primary btn-block" style={{ marginBottom: 8 }} onClick={() => exportJobPDF(currentJob, showToast)}>
                   <Icons.Download size={16} /> Export PDF
                 </button>
+
+                {isCompleted && (
+                  <button className="btn btn-block" style={{ marginBottom: 8, background: "#1E40AF", color: "#fff" }} onClick={() => exportJobDBS(currentJob, showToast)}>
+                    <Icons.Download size={16} /> Export to DBS
+                  </button>
+                )}
 
                 {!isLocked && !isHistory && (
                   <button className="btn btn-danger btn-block" style={{ marginTop: 8 }} onClick={() => {
@@ -1952,11 +2070,13 @@ export default function App() {
                 <button
                   className="btn btn-lg"
                   style={{ flex: 2, background: "var(--accent-dark)", color: "#fff", fontWeight: 700 }}
-                  onClick={() => {
+                  onClick={async () => {
                     updateJob(currentJob.id, { is_completed: true });
                     setShowCompleteModal(false);
                     setEditingUnlocked(false);
-                    showToast("Check measure completed ✓");
+                    // Save to cloud after state updates
+                    setTimeout(() => syncJob(currentJob.id), 300);
+                    showToast("Check measure completed & saved ✓");
                   }}
                 >
                   <Icons.Check size={18} /> Confirm Complete

@@ -693,6 +693,11 @@ const exportJobDBS = async (job, showToast) => {
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, "Measurements");
 
+    if (job.notes) {
+      const notesWs = XLSX.utils.aoa_to_sheet([["General Notes"], [job.notes]]);
+      XLSX.utils.book_append_sheet(wb, notesWs, "Notes");
+    }
+
     const namePart = (job.lead_name || "measure").replace(/\s+/g, "_");
     const addrPart = (job.street || "").replace(/\s+/g, "_");
     XLSX.writeFile(wb, `${namePart}_${addrPart}_DBS.xlsx`);
@@ -818,6 +823,38 @@ const exportJobPDF = async (job, showToast) => {
     // Move below the lead details box
     y = y - 8 + leadBoxHeight + 4;
 
+    let currentPage = 1;
+
+    // General Notes
+    if (job.notes) {
+      y += 10;
+      if (y > ph - 30) {
+        doc.addPage();
+        currentPage++;
+        y = await addHeader(currentPage, totalPages);
+      }
+      doc.setFontSize(12);
+      doc.setFont("helvetica", "bold");
+      doc.setTextColor(28, 46, 15);
+      doc.text("General Notes", mx, y);
+      y += 8;
+
+      doc.setFontSize(9);
+      doc.setFont("helvetica", "normal");
+      doc.setTextColor(15, 23, 42);
+      const noteLines = doc.splitTextToSize(job.notes, cw - 12);
+      const noteBoxH = 8 + noteLines.length * 5;
+      if (y + noteBoxH > ph - 15) {
+        doc.addPage();
+        currentPage++;
+        y = await addHeader(currentPage, totalPages);
+      }
+      doc.setFillColor(242, 249, 231);
+      doc.roundedRect(mx, y, cw, noteBoxH, 2, 2, "F");
+      doc.text(noteLines, mx + 6, y + 6);
+      y += noteBoxH;
+    }
+
     // Window summary - separate section
     y += 10;
     doc.setFontSize(12);
@@ -878,8 +915,6 @@ const exportJobPDF = async (job, showToast) => {
       } catch {}
       return { endX: mx, height: 0 };
     };
-
-    let currentPage = 1;
 
     for (let wIdx = 0; wIdx < job.windows.length; wIdx++) {
       const w = job.windows[wIdx];
@@ -1109,7 +1144,7 @@ export default function App() {
   const [editingUnlocked, setEditingUnlocked] = useState(false);
   const [lastRefresh, setLastRefresh] = useState(null);
   const [refreshing, setRefreshing] = useState(false);
-  const [activeTab, setActiveTab] = useState("active"); // "active" | "history"
+  const [activeTab, setActiveTab] = useState("active"); // "active" | "completed"
 
   const STATUS_OPTIONS = ["In Progress", "Approved", "Rejected", "Uncontactable", "Delayed"];
 
@@ -1152,6 +1187,7 @@ export default function App() {
             : Array.isArray(rawWindows?.items) ? rawWindows.items : [];
           const isJobCompleted = windowsMeta.is_completed || false;
           const jobStatus = windowsMeta.status || "In Progress";
+          const jobNotes = windowsMeta.notes || "";
           const localJob = prev.find((j) => j.id === row.id);
 
           const windows = windowData.map((rw) => {
@@ -1207,6 +1243,7 @@ export default function App() {
             is_completed: isJobCompleted,
             measure_date: row.measure_date || "",
             measure_time: row.measure_time || "",
+            notes: jobNotes,
             windows,
             synced: true,
             created_at: row.created_at,
@@ -1285,9 +1322,10 @@ export default function App() {
   const isCompleted = currentJob?.is_completed || false;
   const isLocked = (isHistory || isCompleted) && !editingUnlocked;
 
-  // Split jobs into active and history
-  const activeJobs = jobs.filter((j) => !j.status || j.status === "In Progress");
-  const historyJobs = jobs.filter((j) => j.status && j.status !== "In Progress");
+  // Split jobs into active and completed, newest first
+  const byNewest = (a, b) => new Date(b.created_at) - new Date(a.created_at);
+  const activeJobs = jobs.filter((j) => !j.is_completed).sort(byNewest);
+  const completedJobs = jobs.filter((j) => j.is_completed).sort(byNewest);
 
   const getStatusPillClass = (status) => {
     switch (status) {
@@ -1312,6 +1350,7 @@ export default function App() {
       status: "In Progress",
       measure_date: "",
       measure_time: "",
+      notes: "",
       windows: [],
       synced: false,
       created_at: new Date().toISOString(),
@@ -1516,7 +1555,7 @@ export default function App() {
         postcode: job.postcode || null,
         measure_date: job.measure_date || null,
         measure_time: job.measure_time || null,
-        windows: { _meta: { is_completed: job.is_completed || false, status: job.status || "In Progress" }, items: windowsSummary },
+        windows: { _meta: { is_completed: job.is_completed || false, status: job.status || "In Progress", notes: job.notes || "" }, items: windowsSummary },
         measurements_json: windowsSummary,
         created_at: job.created_at,
       };
@@ -1611,8 +1650,8 @@ export default function App() {
               <button className={`tab-btn ${activeTab === "active" ? "active" : ""}`} onClick={() => setActiveTab("active")}>
                 Active ({activeJobs.length})
               </button>
-              <button className={`tab-btn ${activeTab === "history" ? "active" : ""}`} onClick={() => setActiveTab("history")}>
-                History ({historyJobs.length})
+              <button className={`tab-btn ${activeTab === "completed" ? "active" : ""}`} onClick={() => setActiveTab("completed")}>
+                Completed ({completedJobs.length})
               </button>
             </div>
 
@@ -1669,28 +1708,26 @@ export default function App() {
                 </>
               )}
 
-              {activeTab === "history" && (
+              {activeTab === "completed" && (
                 <>
-                  {historyJobs.length === 0 ? (
+                  {completedJobs.length === 0 ? (
                     <div className="empty-state">
                       <div className="empty-icon"><Icons.List size={48} /></div>
-                      <div className="empty-title">No History Yet</div>
-                      <div className="empty-desc">Jobs with Approved, Rejected, or other non-active statuses will appear here.</div>
+                      <div className="empty-title">No Completed Jobs Yet</div>
+                      <div className="empty-desc">Check measures marked as completed will appear here.</div>
                     </div>
                   ) : (
                     <div className="card" style={{ margin: "16px", borderRadius: "var(--radius)" }}>
-                      {historyJobs.map((job) => (
+                      {completedJobs.map((job) => (
                         <div className="job-item" key={job.id} onClick={() => goJob(job.id)}>
                           <div className="job-avatar" style={{ background: "var(--warm-100)", color: "var(--warm-300)" }}><Icons.User size={20} /></div>
                           <div className="job-info">
                             <div className="job-name">{job.lead_name || "Untitled Lead"}</div>
                             <div className="job-address">{[job.street, job.suburb, job.postcode].filter(Boolean).join(", ") || "No address"}</div>
                             <div style={{ marginTop: 4, display: "flex", gap: 6, flexWrap: "wrap" }}>
-                              <span className={`pill ${getStatusPillClass(job.status)}`}>{job.status}</span>
-                              {job.is_completed ? (
-                                <span className="pill" style={{ background: "var(--accent-bg)", color: "var(--accent)" }}><Icons.Check size={10} /> Completed</span>
-                              ) : (
-                                <span className="pill" style={{ background: "#FFF7ED", color: "#C2410C" }}><Icons.Edit size={10} /> In Progress</span>
+                              <span className="pill" style={{ background: "var(--accent-bg)", color: "var(--accent)" }}><Icons.Check size={10} /> Completed</span>
+                              {job.status && job.status !== "In Progress" && (
+                                <span className={`pill ${getStatusPillClass(job.status)}`}>{job.status}</span>
                               )}
                             </div>
                           </div>
@@ -1853,6 +1890,21 @@ export default function App() {
                         />
                       </div>
                     </div>
+                  </div>
+                </div>
+
+                {/* General Notes */}
+                <div className="section-title">General Notes</div>
+                <div className="card" style={{ marginBottom: 16 }}>
+                  <div className="card-body">
+                    <textarea
+                      className="field-input"
+                      placeholder="Notes about the overall job or measure..."
+                      value={currentJob.notes || ""}
+                      disabled={isLocked}
+                      onChange={(e) => updateJob(currentJob.id, { notes: e.target.value })}
+                      rows={4}
+                    />
                   </div>
                 </div>
 

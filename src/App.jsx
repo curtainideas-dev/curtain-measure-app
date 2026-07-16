@@ -1,81 +1,11 @@
 import { useState, useEffect, useRef, useCallback } from "react";
+import { DEFAULT_QUOTE_CONFIG, ROLLER_CATEGORIES, calcLine, fmt as fmtPrice } from "./estimatorPricing";
 
 // ============================================================
 // SUPABASE CONFIG — Replace with your own credentials
 // ============================================================
 const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL || "";
 const SUPABASE_ANON_KEY = import.meta.env.VITE_SUPABASE_ANON_KEY || "";
-
-// Minimal Supabase client
-const supabase = {
-  from: (table) => ({
-    select: async (cols = "*") => {
-      const res = await fetch(`${SUPABASE_URL}/rest/v1/${table}?select=${cols}&order=created_at.desc`, {
-        headers: { apikey: SUPABASE_ANON_KEY, Authorization: `Bearer ${SUPABASE_ANON_KEY}` },
-      });
-      const data = await res.json();
-      return { data, error: res.ok ? null : data };
-    },
-    insert: async (rows) => {
-      const res = await fetch(`${SUPABASE_URL}/rest/v1/${table}`, {
-        method: "POST",
-        headers: {
-          apikey: SUPABASE_ANON_KEY,
-          Authorization: `Bearer ${SUPABASE_ANON_KEY}`,
-          "Content-Type": "application/json",
-          Prefer: "return=representation",
-        },
-        body: JSON.stringify(rows),
-      });
-      const data = await res.json();
-      return { data, error: res.ok ? null : data };
-    },
-    update: async (row) => ({
-      eq: async (col, val) => {
-        const res = await fetch(`${SUPABASE_URL}/rest/v1/${table}?${col}=eq.${val}`, {
-          method: "PATCH",
-          headers: {
-            apikey: SUPABASE_ANON_KEY,
-            Authorization: `Bearer ${SUPABASE_ANON_KEY}`,
-            "Content-Type": "application/json",
-            Prefer: "return=representation",
-          },
-          body: JSON.stringify(row),
-        });
-        const data = await res.json();
-        return { data, error: res.ok ? null : data };
-      },
-    }),
-    delete: () => ({
-      eq: async (col, val) => {
-        const res = await fetch(`${SUPABASE_URL}/rest/v1/${table}?${col}=eq.${val}`, {
-          method: "DELETE",
-          headers: { apikey: SUPABASE_ANON_KEY, Authorization: `Bearer ${SUPABASE_ANON_KEY}` },
-        });
-        return { error: res.ok ? null : "Delete failed" };
-      },
-    }),
-  }),
-  storage: {
-    from: (bucket) => ({
-      upload: async (path, file) => {
-        const res = await fetch(`${SUPABASE_URL}/storage/v1/object/${bucket}/${path}`, {
-          method: "POST",
-          headers: {
-            apikey: SUPABASE_ANON_KEY,
-            Authorization: `Bearer ${SUPABASE_ANON_KEY}`,
-            "Content-Type": file.type,
-          },
-          body: file,
-        });
-        return { error: res.ok ? null : "Upload failed" };
-      },
-      getPublicUrl: (path) => ({
-        data: { publicUrl: `${SUPABASE_URL}/storage/v1/object/public/${bucket}/${path}` },
-      }),
-    }),
-  },
-};
 
 // ============================================================
 // ICONS (inline SVG components)
@@ -91,20 +21,13 @@ const Icons = {
   Camera: (p) => <Icon {...p} d={<><path d="M23 19a2 2 0 01-2 2H3a2 2 0 01-2-2V8a2 2 0 012-2h4l2-3h6l2 3h4a2 2 0 012 2z"/><circle cx="12" cy="13" r="4"/></>} />,
   ChevronLeft: (p) => <Icon {...p} d="M15 18l-6-6 6-6" />,
   ChevronRight: (p) => <Icon {...p} d="M9 18l6-6-6-6" />,
-  Home: (p) => <Icon {...p} d={<><path d="M3 9l9-7 9 7v11a2 2 0 01-2 2H5a2 2 0 01-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/></>} />,
   Ruler: (p) => <Icon {...p} d={<><path d="M21.7 5.7L5.7 21.7a1 1 0 01-1.4 0L1.3 18.7a1 1 0 010-1.4L17.3 1.3a1 1 0 011.4 0l3 3a1 1 0 010 1.4z"/><line x1="7" y1="13.5" x2="9.5" y2="11"/><line x1="10.5" y1="10" x2="13" y2="7.5"/><line x1="14" y1="6.5" x2="16.5" y2="4"/></>} />,
   Trash: (p) => <Icon {...p} d={<><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6m3 0V4a2 2 0 012-2h4a2 2 0 012 2v2"/></>} />,
-  Save: (p) => <Icon {...p} d={<><path d="M19 21H5a2 2 0 01-2-2V5a2 2 0 012-2h11l5 5v11a2 2 0 01-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></>} />,
   List: (p) => <Icon {...p} d={<><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/></>} />,
   User: (p) => <Icon {...p} d={<><path d="M20 21v-2a4 4 0 00-4-4H8a4 4 0 00-4 4v2"/><circle cx="12" cy="7" r="4"/></>} />,
-  Phone: (p) => <Icon {...p} d="M22 16.92v3a2 2 0 01-2.18 2 19.79 19.79 0 01-8.63-3.07 19.5 19.5 0 01-6-6 19.79 19.79 0 01-3.07-8.67A2 2 0 014.11 2h3a2 2 0 012 1.72c.127.96.361 1.903.7 2.81a2 2 0 01-.45 2.11L8.09 9.91a16 16 0 006 6l1.27-1.27a2 2 0 012.11-.45c.907.339 1.85.573 2.81.7A2 2 0 0122 16.92z" />,
-  MapPin: (p) => <Icon {...p} d={<><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0118 0z"/><circle cx="12" cy="10" r="3"/></>} />,
-  Calendar: (p) => <Icon {...p} d={<><rect x="3" y="4" width="18" height="18" rx="2" ry="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></>} />,
-  Image: (p) => <Icon {...p} d={<><rect x="3" y="3" width="18" height="18" rx="2" ry="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></>} />,
   Check: (p) => <Icon {...p} d="M20 6L9 17l-5-5" />,
   X: (p) => <Icon {...p} d={<><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></>} />,
   Edit: (p) => <Icon {...p} d={<><path d="M11 4H4a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 013 3L12 15l-4 1 1-4 9.5-9.5z"/></>} />,
-  Cloud: (p) => <Icon {...p} d={<><path d="M18 10h-1.26A8 8 0 109 20h9a5 5 0 000-10z"/></>} />,
   Window: (p) => <Icon {...p} d={<><rect x="2" y="3" width="20" height="18" rx="1"/><line x1="12" y1="3" x2="12" y2="21"/><line x1="2" y1="12" x2="22" y2="12"/></>} />,
   Pen: (p) => <Icon {...p} d={<><path d="M12 19l7-7 3 3-7 7-3-3z"/><path d="M18 13l-1.5-7.5L2 2l3.5 14.5L13 18l5-5z"/><path d="M2 2l7.586 7.586"/><circle cx="11" cy="11" r="2"/></>} />,
   Undo: (p) => <Icon {...p} d={<><polyline points="1 4 1 10 7 10"/><path d="M3.51 15a9 9 0 102.13-9.36L1 10"/></>} />,
@@ -351,47 +274,6 @@ textarea.field-input { resize: vertical; min-height: 80px; line-height: 1.5; }
   100% { color: rgba(255,255,255,0.7); }
 }
 
-/* Sync Success Overlay */
-.sync-overlay {
-  position: fixed; inset: 0; z-index: 150;
-  display: flex; align-items: center; justify-content: center;
-  background: rgba(0,0,0,0.4); backdrop-filter: blur(4px);
-  animation: overlay-in 0.2s ease;
-}
-@keyframes overlay-in {
-  from { opacity: 0; }
-  to { opacity: 1; }
-}
-.sync-overlay-card {
-  background: #fff; border-radius: 20px; padding: 40px 32px;
-  text-align: center; max-width: 300px; width: 90%;
-  box-shadow: var(--shadow-lg);
-  animation: overlay-card-in 0.3s ease;
-}
-@keyframes overlay-card-in {
-  from { opacity: 0; transform: scale(0.9) translateY(10px); }
-  to { opacity: 1; transform: scale(1) translateY(0); }
-}
-.sync-check-circle {
-  width: 64px; height: 64px; border-radius: 50%;
-  background: var(--accent-bg); color: var(--accent);
-  display: flex; align-items: center; justify-content: center;
-  margin: 0 auto 16px;
-  animation: check-pop 0.4s ease 0.15s both;
-}
-@keyframes check-pop {
-  0% { transform: scale(0); }
-  60% { transform: scale(1.15); }
-  100% { transform: scale(1); }
-}
-.sync-overlay-title {
-  font-family: var(--font-body); font-size: 22px; font-weight: 700;
-  margin-bottom: 6px; color: var(--ink);
-}
-.sync-overlay-desc {
-  font-size: 13px; color: var(--warm-300); line-height: 1.5;
-}
-
 /* Empty State */
 .empty-state {
   padding: 60px 32px; text-align: center; color: var(--warm-300);
@@ -407,7 +289,6 @@ textarea.field-input { resize: vertical; min-height: 80px; line-height: 1.5; }
 }
 .pill-synced { background: var(--accent-bg); color: var(--accent); }
 .pill-local { background: var(--warning-bg); color: var(--warning); }
-.pill-error { background: var(--danger-bg); color: var(--danger); }
 
 /* Divider */
 .divider { height: 1px; background: var(--warm-200); margin: 16px 0; }
@@ -419,14 +300,6 @@ textarea.field-input { resize: vertical; min-height: 80px; line-height: 1.5; }
 .meas-section-dot {
   width: 8px; height: 8px; border-radius: 50%;
 }
-
-/* Connection Status */
-.conn-status {
-  font-size: 11px; display: flex; align-items: center; gap: 4px; padding: 4px 10px;
-  border-radius: 99px;
-}
-.conn-online { background: var(--success-bg); color: var(--success); }
-.conn-offline { background: var(--danger-bg); color: var(--danger); }
 
 /* Drawing Editor */
 .draw-overlay {
@@ -512,12 +385,9 @@ select.field-input[disabled], select.field-input:disabled {
 /* Utility */
 .scroll-area { flex: 1; overflow-y: auto; -webkit-overflow-scrolling: touch; padding-bottom: 80px; }
 .p-16 { padding: 16px; }
-.mt-8 { margin-top: 8px; }
 .mt-16 { margin-top: 16px; }
-.mb-8 { margin-bottom: 8px; }
 .mb-16 { margin-bottom: 16px; }
 .flex-between { display: flex; justify-content: space-between; align-items: center; }
-.gap-8 { gap: 8px; }
 .text-center { text-align: center; }
 .text-sm { font-size: 13px; }
 .text-muted { color: var(--warm-300); }
@@ -1137,14 +1007,13 @@ export default function App() {
   const [currentJobId, setCurrentJobId] = useState(null);
   const [currentWindowIdx, setCurrentWindowIdx] = useState(null);
   const [toast, setToast] = useState(null);
-  const [isOnline, setIsOnline] = useState(true);
-  const [supabaseConnected, setSupabaseConnected] = useState(false);
   const [showSetup, setShowSetup] = useState(false);
   const [showCompleteModal, setShowCompleteModal] = useState(false);
   const [editingUnlocked, setEditingUnlocked] = useState(false);
   const [lastRefresh, setLastRefresh] = useState(null);
   const [refreshing, setRefreshing] = useState(false);
-  const [activeTab, setActiveTab] = useState("active"); // "active" | "completed"
+  const [activeTab, setActiveTab] = useState("active"); // "active" | "completed" | "deleted"
+  const [quoteConfig, setQuoteConfig] = useState(DEFAULT_QUOTE_CONFIG);
 
   const STATUS_OPTIONS = ["In Progress", "Approved", "Rejected", "Uncontactable", "Delayed"];
 
@@ -1186,6 +1055,7 @@ export default function App() {
             : Array.isArray(rawWindows) ? rawWindows
             : Array.isArray(rawWindows?.items) ? rawWindows.items : [];
           const isJobCompleted = windowsMeta.is_completed || false;
+          const isJobDeleted = windowsMeta.is_deleted || false;
           const jobStatus = windowsMeta.status || "In Progress";
           const jobNotes = windowsMeta.notes || "";
           const localJob = prev.find((j) => j.id === row.id);
@@ -1220,6 +1090,7 @@ export default function App() {
               extra_photo_urls: cloudExtras,
               measurements: rw.measurements || {},
               comments: rw.comments || "",
+              quote: rw.quote ?? lw?.quote ?? {},
             };
           });
 
@@ -1241,6 +1112,7 @@ export default function App() {
             postcode: row.postcode || "",
             status: jobStatus,
             is_completed: isJobCompleted,
+            is_deleted: isJobDeleted,
             measure_date: row.measure_date || "",
             measure_time: row.measure_time || "",
             notes: jobNotes,
@@ -1253,7 +1125,6 @@ export default function App() {
         return [...localOnly, ...localUnsyncedExisting, ...remoteJobs];
       });
 
-      setSupabaseConnected(true);
       setLastRefresh(new Date());
     } catch (err) {
       console.error("Supabase fetch error:", err);
@@ -1275,16 +1146,26 @@ export default function App() {
     } catch {}
 
     hardSyncFromSupabase();
+  }, []);
 
-    setIsOnline(navigator.onLine);
-    const on = () => setIsOnline(true);
-    const off = () => setIsOnline(false);
-    window.addEventListener("online", on);
-    window.addEventListener("offline", off);
-    return () => {
-      window.removeEventListener("online", on);
-      window.removeEventListener("offline", off);
-    };
+  // Load live pricing config from the same Supabase project the estimator app uses,
+  // falling back to DEFAULT_QUOTE_CONFIG if unset/unreachable.
+  useEffect(() => {
+    if (!SUPABASE_URL || !SUPABASE_ANON_KEY) return;
+    (async () => {
+      try {
+        const res = await fetch(`${SUPABASE_URL}/rest/v1/quote_config?id=eq.1&select=config`, {
+          headers: { apikey: SUPABASE_ANON_KEY, Authorization: `Bearer ${SUPABASE_ANON_KEY}` },
+        });
+        if (!res.ok) return;
+        const rows = await res.json();
+        if (Array.isArray(rows) && rows[0]?.config) {
+          setQuoteConfig({ ...DEFAULT_QUOTE_CONFIG, ...rows[0].config });
+        }
+      } catch (err) {
+        console.warn("Failed to load quote config, using defaults:", err);
+      }
+    })();
   }, []);
 
   // Persist to localStorage
@@ -1294,14 +1175,6 @@ export default function App() {
     } catch (err) {
       console.warn("localStorage save failed (likely quota exceeded):", err.message);
     }
-  }, [jobs]);
-
-  // Auto-sync: debounce 3 seconds after any job becomes unsynced
-  const jobsRef = useRef(jobs);
-
-  // Always keep jobsRef pointing to the latest jobs
-  useEffect(() => {
-    jobsRef.current = jobs;
   }, [jobs]);
 
   // Scroll to top on screen change
@@ -1321,11 +1194,13 @@ export default function App() {
   const isHistory = currentJob && currentJob.status !== "In Progress";
   const isCompleted = currentJob?.is_completed || false;
   const isLocked = (isHistory || isCompleted) && !editingUnlocked;
+  const jobQuote = currentJob ? getJobQuoteBreakdown(currentJob, quoteConfig) : null;
 
-  // Split jobs into active and completed, newest first
+  // Split jobs into active, completed, and deleted, newest first
   const byNewest = (a, b) => new Date(b.created_at) - new Date(a.created_at);
-  const activeJobs = jobs.filter((j) => !j.is_completed).sort(byNewest);
-  const completedJobs = jobs.filter((j) => j.is_completed).sort(byNewest);
+  const activeJobs = jobs.filter((j) => !j.is_completed && !j.is_deleted).sort(byNewest);
+  const completedJobs = jobs.filter((j) => j.is_completed && !j.is_deleted).sort(byNewest);
+  const deletedJobs = jobs.filter((j) => j.is_deleted).sort(byNewest);
 
   const getStatusPillClass = (status) => {
     switch (status) {
@@ -1353,6 +1228,7 @@ export default function App() {
       notes: "",
       windows: [],
       synced: false,
+      is_deleted: false,
       created_at: new Date().toISOString(),
     };
     setJobs((prev) => [newJob, ...prev]);
@@ -1368,7 +1244,23 @@ export default function App() {
 
 
 
-  const deleteJob = async (id) => {
+  // Soft delete: moves the job to the Deleted tab instead of removing it
+  const deleteJob = (id) => {
+    updateJob(id, { is_deleted: true });
+    setScreen("list");
+    setActiveTab("deleted");
+    setTimeout(() => syncJob(id), 300);
+    showToast("Job moved to Deleted");
+  };
+
+  // Restore a soft-deleted job back to Active/Completed
+  const restoreJob = (id) => {
+    updateJob(id, { is_deleted: false });
+    setTimeout(() => syncJob(id), 300);
+    showToast("Job restored");
+  };
+
+  const permanentlyDeleteJob = async (id) => {
     setJobs((prev) => prev.filter((j) => j.id !== id));
     if (currentJobId === id) { setCurrentJobId(null); setScreen("list"); }
 
@@ -1387,7 +1279,7 @@ export default function App() {
       }
     }
 
-    showToast("Job deleted");
+    showToast("Job permanently deleted");
   };
 
   // ---- Window CRUD ----
@@ -1409,6 +1301,7 @@ export default function App() {
       extra_photos: [],
       measurements: blankMeasurements(),
       comments: "",
+      quote: {},
     };
     updateJob(currentJobId, { windows: [...j.windows, newWin] });
     setCurrentWindowIdx(j.windows.length);
@@ -1540,6 +1433,7 @@ export default function App() {
           control_side: w.control_side || "",
           measurements: w.measurements,
           comments: w.comments,
+          quote: w.quote || {},
           main_photo_url: mainPhotoUrl,
           extra_photo_urls: extraPhotoUrls,
         });
@@ -1555,7 +1449,7 @@ export default function App() {
         postcode: job.postcode || null,
         measure_date: job.measure_date || null,
         measure_time: job.measure_time || null,
-        windows: { _meta: { is_completed: job.is_completed || false, status: job.status || "In Progress", notes: job.notes || "" }, items: windowsSummary },
+        windows: { _meta: { is_completed: job.is_completed || false, is_deleted: job.is_deleted || false, status: job.status || "In Progress", notes: job.notes || "" }, items: windowsSummary },
         measurements_json: windowsSummary,
         created_at: job.created_at,
       };
@@ -1596,7 +1490,6 @@ export default function App() {
         });
         return { ...j, windows: updatedWindows, synced: true };
       }));
-      setSupabaseConnected(true);
       showToast("Saved ✓");
     } catch (err) {
       console.error("Sync error:", err);
@@ -1652,6 +1545,9 @@ export default function App() {
               </button>
               <button className={`tab-btn ${activeTab === "completed" ? "active" : ""}`} onClick={() => setActiveTab("completed")}>
                 Completed ({completedJobs.length})
+              </button>
+              <button className={`tab-btn ${activeTab === "deleted" ? "active" : ""}`} onClick={() => setActiveTab("deleted")}>
+                Deleted ({deletedJobs.length})
               </button>
             </div>
 
@@ -1730,6 +1626,34 @@ export default function App() {
                                 <span className={`pill ${getStatusPillClass(job.status)}`}>{job.status}</span>
                               )}
                             </div>
+                          </div>
+                          <div className="job-meta">
+                            <div className="job-count">{job.windows.length} window{job.windows.length !== 1 ? "s" : ""}</div>
+                            <div className="job-date">{formatDate(job.created_at)}</div>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </>
+              )}
+
+              {activeTab === "deleted" && (
+                <>
+                  {deletedJobs.length === 0 ? (
+                    <div className="empty-state">
+                      <div className="empty-icon"><Icons.Trash size={48} /></div>
+                      <div className="empty-title">No Deleted Jobs</div>
+                      <div className="empty-desc">Jobs you delete will appear here until permanently deleted.</div>
+                    </div>
+                  ) : (
+                    <div className="card" style={{ margin: "16px", borderRadius: "var(--radius)" }}>
+                      {deletedJobs.map((job) => (
+                        <div className="job-item" key={job.id} onClick={() => goJob(job.id)}>
+                          <div className="job-avatar" style={{ background: "var(--danger-bg)", color: "var(--danger)" }}><Icons.Trash size={20} /></div>
+                          <div className="job-info">
+                            <div className="job-name">{job.lead_name || "Untitled Lead"}</div>
+                            <div className="job-address">{[job.street, job.suburb, job.postcode].filter(Boolean).join(", ") || "No address"}</div>
                           </div>
                           <div className="job-meta">
                             <div className="job-count">{job.windows.length} window{job.windows.length !== 1 ? "s" : ""}</div>
@@ -1938,16 +1862,23 @@ export default function App() {
                           <div className="window-dims">
                             {(() => {
                               const m = win.measurements || {};
+                              const treatmentDims = m.treatment_width || m.treatment_drop
+                                ? `Treatment: ${m.treatment_width || "—"} × ${m.treatment_drop || "—"}mm`
+                                : null;
                               if (win.is_bay) {
-                                return m.bay_left_width || m.bay_middle_width ? `Bay: ${[m.bay_left_width, m.bay_middle_width, m.bay_right_width].filter(Boolean).join(" / ")}mm` : "No measurements yet";
+                                if (m.bay_left_width || m.bay_middle_width) {
+                                  return `Bay: ${[m.bay_left_width, m.bay_middle_width, m.bay_right_width].filter(Boolean).join(" / ")}mm`;
+                                }
+                                return treatmentDims || "No measurements yet";
                               }
                               if (win.sliding_door) {
-                                return m.sliding_height ? `Sliding: ${m.sliding_height}mm H` : "No measurements yet";
+                                if (m.sliding_height) return `Sliding: ${m.sliding_height}mm H`;
+                                return treatmentDims || "No measurements yet";
                               }
                               if (m.inside_width || m.outside_width) {
                                 return `${m.inside_width || "—"} × ${m.inside_length || "—"}mm`;
                               }
-                              return "No measurements yet";
+                              return treatmentDims || "No measurements yet";
                             })()}
                           </div>
                         </div>
@@ -1957,16 +1888,61 @@ export default function App() {
                   </div>
                 )}
 
-                {!isLocked && (
+                {!isLocked && !currentJob.is_deleted && (
                   <button className="btn btn-secondary btn-block" onClick={addWindow}>
                     <Icons.Plus size={16} /> Add Window
                   </button>
                 )}
 
+                {jobQuote && jobQuote.rows.length > 0 && (
+                  <>
+                    <div className="section-title" style={{ padding: "16px 0 8px" }}>Quote</div>
+                    <div className="card mb-16">
+                      <div className="card-body">
+                        {jobQuote.rows.map((row, i) => (
+                          <div key={i} style={{
+                            display: "flex", justifyContent: "space-between", alignItems: "flex-start",
+                            gap: 12, padding: "8px 0",
+                            borderTop: i > 0 ? "1px solid var(--warm-100)" : "none",
+                          }}>
+                            <div style={{ minWidth: 0 }}>
+                              <div style={{ fontSize: 13, fontWeight: 600 }}>{row.windowLabel} · {row.treatmentLabel}</div>
+                              {row.status === "priced" && (
+                                <div className="text-sm text-muted">{row.desc}</div>
+                              )}
+                              {row.status === "manual" && (
+                                <div className="text-sm text-muted">Not supported by the calculator — price manually</div>
+                              )}
+                              {row.status === "incomplete" && (
+                                <div className="text-sm text-muted">Incomplete — open window to finish pricing</div>
+                              )}
+                            </div>
+                            <div style={{ flexShrink: 0, fontWeight: 700, fontSize: 14, whiteSpace: "nowrap" }}>
+                              {row.status === "priced" ? `$${fmtPrice(row.low)} – $${fmtPrice(row.high)}` : "—"}
+                            </div>
+                          </div>
+                        ))}
+
+                        <div style={{ marginTop: 8, paddingTop: 12, borderTop: "1.5px solid var(--warm-200)", textAlign: "center" }}>
+                          <div className="text-sm text-muted" style={{ marginBottom: 4 }}>Job total estimate · inc. GST</div>
+                          <div style={{ fontSize: 24, fontWeight: 700 }}>
+                            {jobQuote.pricedCount > 0 ? `$${fmtPrice(jobQuote.totalLow)} – $${fmtPrice(jobQuote.totalHigh)}` : "—"}
+                          </div>
+                          <div className="text-sm text-muted" style={{ marginTop: 4 }}>
+                            {jobQuote.pricedCount} item{jobQuote.pricedCount !== 1 ? "s" : ""} priced
+                            {jobQuote.pricedCount > 0 ? ` · ±${Math.round(quoteConfig.buffer / 2)}% buffer applied` : ""}
+                            {jobQuote.excludedWindows > 0 ? ` · ${jobQuote.excludedWindows} bay/sliding window${jobQuote.excludedWindows > 1 ? "s" : ""} excluded` : ""}
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  </>
+                )}
+
                 <div className="divider" />
 
                 {/* Complete / Edit buttons */}
-                {!isHistory && (
+                {!isHistory && !currentJob.is_deleted && (
                   <div style={{ display: "flex", gap: 8, marginBottom: 8 }}>
                     {isCompleted && !editingUnlocked ? (
                       <>
@@ -2023,12 +1999,25 @@ export default function App() {
                   </button>
                 )}
 
-                {!isLocked && !isHistory && (
-                  <button className="btn btn-danger btn-block" style={{ marginTop: 8 }} onClick={() => {
-                    if (confirm("Delete this entire job?")) deleteJob(currentJob.id);
-                  }}>
-                    <Icons.Trash size={16} /> Delete Job
-                  </button>
+                {currentJob.is_deleted ? (
+                  <>
+                    <button className="btn btn-secondary btn-block" style={{ marginTop: 8 }} onClick={() => restoreJob(currentJob.id)}>
+                      <Icons.Undo size={16} /> Restore Job
+                    </button>
+                    <button className="btn btn-danger btn-block" style={{ marginTop: 8 }} onClick={() => {
+                      if (confirm("Permanently delete this job? This cannot be undone.")) permanentlyDeleteJob(currentJob.id);
+                    }}>
+                      <Icons.Trash size={16} /> Permanently Delete
+                    </button>
+                  </>
+                ) : (
+                  !isLocked && !isHistory && (
+                    <button className="btn btn-danger btn-block" style={{ marginTop: 8 }} onClick={() => {
+                      if (confirm("Delete this entire job? It will be moved to the Deleted tab.")) deleteJob(currentJob.id);
+                    }}>
+                      <Icons.Trash size={16} /> Delete Job
+                    </button>
+                  )
                 )}
               </div>
             </div>
@@ -2048,6 +2037,7 @@ export default function App() {
             onDeletePhoto={deletePhotoFromStorage}
             onSave={() => syncJob(currentJob.id)}
             readOnly={isLocked}
+            quoteConfig={quoteConfig}
             onNext={() => {
               if (currentWindowIdx < currentJob.windows.length - 1) {
                 setCurrentWindowIdx(currentWindowIdx + 1);
@@ -2146,7 +2136,241 @@ export default function App() {
 // ============================================================
 // WINDOW DETAIL VIEW
 // ============================================================
-function WindowDetail({ job, window: win, windowIdx, totalWindows, onBack, onUpdate, onDelete, onDeletePhoto, onSave, readOnly, onNext, onPrev, showToast }) {
+const TREATMENT_CALC_MAP = {
+  sheer: { calcType: "Sheer", label: "Sheer" },
+  drape: { calcType: "Drape", label: "Drape" },
+  blind: { calcType: "Roller blind", label: "Roller Blind" },
+  shutter: { calcType: "Shutter", label: "Shutter" },
+  awning: { calcType: null, label: "Awning" },
+};
+const HEADING_OPTIONS = ["Wavefold", "Pinch pleat"];
+const TRACK_GRADE_OPTIONS = ["Standard", "Premium"];
+const SHUTTER_MATERIAL_OPTIONS = ["Basswood", "PVC"];
+
+function computeTreatmentPrice(win, treatmentKey, quoteConfig) {
+  if (win.is_bay || win.sliding_door) return null;
+  const meta = TREATMENT_CALC_MAP[treatmentKey];
+  if (!meta || !meta.calcType) return null;
+  const width = win.measurements?.treatment_width;
+  const drop = win.measurements?.treatment_drop;
+  if (!width || !drop) return null;
+  const q = win.quote?.[treatmentKey] || {};
+  const line = { ...q, type: meta.calcType, width, drop };
+  return calcLine(line, quoteConfig);
+}
+
+function getJobQuoteBreakdown(job, quoteConfig) {
+  const rows = [];
+  let totalLow = 0, totalHigh = 0, pricedCount = 0, excludedWindows = 0;
+
+  (job.windows || []).forEach((win) => {
+    const treatments = (win.treatments || []).filter((t) => TREATMENT_CALC_MAP[t]);
+    if (treatments.length === 0) return;
+
+    if (win.is_bay || win.sliding_door) {
+      excludedWindows++;
+      return;
+    }
+
+    treatments.forEach((key) => {
+      const meta = TREATMENT_CALC_MAP[key];
+      const windowLabel = win.label || "Window";
+      if (!meta.calcType) {
+        rows.push({ windowLabel, treatmentLabel: meta.label, status: "manual" });
+        return;
+      }
+      const price = computeTreatmentPrice(win, key, quoteConfig);
+      if (price) {
+        rows.push({ windowLabel, treatmentLabel: meta.label, status: "priced", desc: price.desc, low: price.low, high: price.high });
+        totalLow += price.low;
+        totalHigh += price.high;
+        pricedCount++;
+      } else {
+        rows.push({ windowLabel, treatmentLabel: meta.label, status: "incomplete" });
+      }
+    });
+  });
+
+  return { rows, totalLow, totalHigh, pricedCount, excludedWindows };
+}
+
+function EstimateSection({ win, onUpdate, quoteConfig, readOnly }) {
+  const treatments = win.treatments || [];
+  const quotable = treatments.filter((t) => TREATMENT_CALC_MAP[t]);
+  if (quotable.length === 0) return null;
+
+  if (win.is_bay || win.sliding_door) {
+    return (
+      <div className="card mb-16">
+        <div className="card-body">
+          <div className="text-sm text-muted">
+            Estimate not available for {win.is_bay ? "bay windows" : "sliding doors"} yet — price this manually.
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  const width = win.measurements?.treatment_width;
+  const drop = win.measurements?.treatment_drop;
+
+  const setQuote = (key, field, value) => {
+    const current = win.quote?.[key] || {};
+    const updated = { ...current, [field]: value };
+    if (field === "heading") updated.trackGrade = "";
+    onUpdate({ quote: { ...win.quote, [key]: updated } });
+  };
+
+  const optBtn = (selected, onClick, label, sub) => (
+    <button
+      key={label}
+      type="button"
+      disabled={readOnly}
+      onClick={onClick}
+      className="btn"
+      style={{
+        flex: "1 0 calc(50% - 4px)", padding: "8px 4px", fontSize: 12, flexDirection: "column", gap: 2,
+        background: selected ? "var(--accent)" : "var(--warm-100)",
+        color: selected ? "#fff" : "var(--ink)",
+        border: `1.5px solid ${selected ? "var(--accent)" : "var(--warm-200)"}`,
+        opacity: readOnly ? 0.8 : 1,
+        cursor: readOnly ? "not-allowed" : "pointer",
+      }}
+    >
+      <span>{label}</span>
+      {sub && <span style={{ fontSize: 10, opacity: 0.8 }}>{sub}</span>}
+    </button>
+  );
+
+  let totalLow = 0, totalHigh = 0, priced = 0;
+
+  const cards = quotable.map((key) => {
+    const meta = TREATMENT_CALC_MAP[key];
+    const q = win.quote?.[key] || {};
+
+    if (!meta.calcType) {
+      return (
+        <div className="card mb-16" key={key}>
+          <div className="card-body">
+            <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 4 }}>{meta.label}</div>
+            <div className="text-sm text-muted">Not supported by the estimator calculator yet — price this manually.</div>
+          </div>
+        </div>
+      );
+    }
+
+    const price = computeTreatmentPrice(win, key, quoteConfig);
+    if (price) { totalLow += price.low; totalHigh += price.high; priced++; }
+
+    return (
+      <div className="card mb-16" key={key}>
+        <div className="card-body">
+          <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 12 }}>{meta.label}</div>
+
+          {(meta.calcType === "Sheer" || meta.calcType === "Drape") && (
+            <>
+              <div style={{ marginBottom: 12 }}>
+                <span className="field-label">Heading</span>
+                <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginTop: 4 }}>
+                  {HEADING_OPTIONS.map((h) => optBtn(q.heading === h, () => setQuote(key, "heading", h), h))}
+                </div>
+              </div>
+
+              {q.heading && (
+                <div style={{ marginBottom: 12 }}>
+                  <span className="field-label">Track Grade</span>
+                  <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginTop: 4 }}>
+                    {TRACK_GRADE_OPTIONS.map((g) => optBtn(q.trackGrade === g, () => setQuote(key, "trackGrade", g), g))}
+                  </div>
+                </div>
+              )}
+
+              <div style={{ marginBottom: 12 }}>
+                <span className="field-label">Fabric Tier</span>
+                <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginTop: 4 }}>
+                  {(quoteConfig.fabrics || []).map((f) =>
+                    optBtn(q.fabric === f.name, () => setQuote(key, "fabric", f.name), f.name, `$${f.min}–$${f.max}/m`)
+                  )}
+                </div>
+              </div>
+
+              <div style={{ display: "flex", gap: 16, marginBottom: 4 }}>
+                <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 13 }}>
+                  <input type="checkbox" disabled={readOnly} checked={!!q.lining} onChange={(e) => setQuote(key, "lining", e.target.checked)} />
+                  Lining
+                </label>
+                <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 13 }}>
+                  <input type="checkbox" disabled={readOnly} checked={!!q.noHem} onChange={(e) => setQuote(key, "noHem", e.target.checked)} />
+                  No bottom hem
+                </label>
+              </div>
+            </>
+          )}
+
+          {meta.calcType === "Roller blind" && (
+            <>
+              <div style={{ marginBottom: 12 }}>
+                <span className="field-label">Fabric Category</span>
+                <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginTop: 4 }}>
+                  {ROLLER_CATEGORIES.map((c) => optBtn(q.rollerCategory === c, () => setQuote(key, "rollerCategory", c), c))}
+                </div>
+              </div>
+              <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 13 }}>
+                <input type="checkbox" disabled={readOnly} checked={!!q.motorised} onChange={(e) => setQuote(key, "motorised", e.target.checked)} />
+                Motorised (+${quoteConfig.motorisation || 200})
+              </label>
+            </>
+          )}
+
+          {meta.calcType === "Shutter" && (
+            <div style={{ marginBottom: 4 }}>
+              <span className="field-label">Material</span>
+              <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginTop: 4 }}>
+                {SHUTTER_MATERIAL_OPTIONS.map((m) => optBtn(q.material === m, () => setQuote(key, "material", m), m))}
+              </div>
+            </div>
+          )}
+
+          {price ? (
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: 12, paddingTop: 12, borderTop: "1px solid var(--warm-200)" }}>
+              <span className="text-sm text-muted">{price.desc}</span>
+              <span style={{ fontWeight: 700 }}>${fmtPrice(price.low)} – ${fmtPrice(price.high)}</span>
+            </div>
+          ) : (
+            <div className="text-sm text-muted" style={{ marginTop: 12 }}>
+              {!width || !drop ? "Enter treatment width & drop above to price this." : "Select the remaining options above to price this."}
+            </div>
+          )}
+        </div>
+      </div>
+    );
+  });
+
+  return (
+    <>
+      <div className="meas-section-header">
+        <div className="meas-section-dot" style={{ background: "var(--accent)" }} />
+        <span style={{ fontSize: 11, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.08em", color: "var(--accent)" }}>
+          Estimate
+        </span>
+      </div>
+      {cards}
+      {priced > 0 && (
+        <div className="card mb-16" style={{ background: "var(--accent-bg)", borderColor: "var(--accent)" }}>
+          <div className="card-body text-center">
+            <div className="text-sm text-muted" style={{ marginBottom: 4 }}>Estimated range for this window · inc. GST</div>
+            <div style={{ fontSize: 22, fontWeight: 700 }}>${fmtPrice(totalLow)} – ${fmtPrice(totalHigh)}</div>
+            <div className="text-sm text-muted" style={{ marginTop: 4 }}>
+              {priced} item{priced > 1 ? "s" : ""} priced · ±{Math.round(quoteConfig.buffer / 2)}% buffer applied
+            </div>
+          </div>
+        </div>
+      )}
+    </>
+  );
+}
+
+function WindowDetail({ job, window: win, windowIdx, totalWindows, onBack, onUpdate, onDelete, onDeletePhoto, onSave, readOnly, onNext, onPrev, showToast, quoteConfig }) {
   const mainPhotoRef = useRef(null);
   const extraPhotoRef = useRef(null);
   const scrollRef = useRef(null);
@@ -2711,6 +2935,9 @@ function WindowDetail({ job, window: win, windowIdx, totalWindows, onBack, onUpd
               </div>
             </>
           )}
+
+          {/* Estimate */}
+          <EstimateSection win={win} onUpdate={onUpdate} quoteConfig={quoteConfig} readOnly={readOnly} />
 
           {/* Surrounds - shown for all types */}
           <div className="meas-section-header">

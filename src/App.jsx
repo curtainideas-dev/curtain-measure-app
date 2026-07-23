@@ -1091,6 +1091,7 @@ export default function App() {
               measurements: rw.measurements || {},
               comments: rw.comments || "",
               quote: rw.quote ?? lw?.quote ?? {},
+              dual_blind: rw.dual_blind ?? lw?.dual_blind ?? false,
             };
           });
 
@@ -1302,6 +1303,7 @@ export default function App() {
       measurements: blankMeasurements(),
       comments: "",
       quote: {},
+      dual_blind: false,
     };
     updateJob(currentJobId, { windows: [...j.windows, newWin] });
     setCurrentWindowIdx(j.windows.length);
@@ -1434,6 +1436,7 @@ export default function App() {
           measurements: w.measurements,
           comments: w.comments,
           quote: w.quote || {},
+          dual_blind: w.dual_blind || false,
           main_photo_url: mainPhotoUrl,
           extra_photo_urls: extraPhotoUrls,
         });
@@ -2147,16 +2150,32 @@ const HEADING_OPTIONS = ["Wavefold", "Pinch pleat"];
 const TRACK_GRADE_OPTIONS = ["Standard", "Premium"];
 const SHUTTER_MATERIAL_OPTIONS = ["Basswood", "PVC"];
 
-function computeTreatmentPrice(win, treatmentKey, quoteConfig) {
+function computeTreatmentPrice(win, treatmentKey, quoteConfig, quoteKeyOverride) {
   if (win.is_bay || win.sliding_door) return null;
   const meta = TREATMENT_CALC_MAP[treatmentKey];
   if (!meta || !meta.calcType) return null;
   const width = win.measurements?.treatment_width;
   const drop = win.measurements?.treatment_drop;
   if (!width || !drop) return null;
-  const q = win.quote?.[treatmentKey] || {};
+  const q = win.quote?.[quoteKeyOverride || treatmentKey] || {};
   const line = { ...q, type: meta.calcType, width, drop };
   return calcLine(line, quoteConfig);
+}
+
+// Dual blind = two independent roller blind fabric panels on the same window
+// opening (stored as quote.blind + quote.blind2), summed into one price.
+function resolveTreatmentPrice(win, treatmentKey, quoteConfig) {
+  if (treatmentKey === "blind" && win.dual_blind) {
+    const price1 = computeTreatmentPrice(win, "blind", quoteConfig, "blind");
+    const price2 = computeTreatmentPrice(win, "blind", quoteConfig, "blind2");
+    if (!price1 || !price2) return null;
+    return {
+      low: price1.low + price2.low,
+      high: price1.high + price2.high,
+      desc: `Dual roller blind · ${price1.desc.replace(/^Roller blind · /, "")} + ${price2.desc.replace(/^Roller blind · /, "")}`,
+    };
+  }
+  return computeTreatmentPrice(win, treatmentKey, quoteConfig);
 }
 
 function getJobQuoteBreakdown(job, quoteConfig) {
@@ -2175,18 +2194,19 @@ function getJobQuoteBreakdown(job, quoteConfig) {
     treatments.forEach((key) => {
       const meta = TREATMENT_CALC_MAP[key];
       const windowLabel = win.label || "Window";
+      const treatmentLabel = key === "blind" && win.dual_blind ? "Dual Roller Blind" : meta.label;
       if (!meta.calcType) {
-        rows.push({ windowLabel, treatmentLabel: meta.label, status: "manual" });
+        rows.push({ windowLabel, treatmentLabel, status: "manual" });
         return;
       }
-      const price = computeTreatmentPrice(win, key, quoteConfig);
+      const price = resolveTreatmentPrice(win, key, quoteConfig);
       if (price) {
-        rows.push({ windowLabel, treatmentLabel: meta.label, status: "priced", desc: price.desc, low: price.low, high: price.high });
+        rows.push({ windowLabel, treatmentLabel, status: "priced", desc: price.desc, low: price.low, high: price.high });
         totalLow += price.low;
         totalHigh += price.high;
         pricedCount++;
       } else {
-        rows.push({ windowLabel, treatmentLabel: meta.label, status: "incomplete" });
+        rows.push({ windowLabel, treatmentLabel, status: "incomplete" });
       }
     });
   });
@@ -2247,6 +2267,7 @@ function EstimateSection({ win, onUpdate, quoteConfig, readOnly }) {
   const cards = quotable.map((key) => {
     const meta = TREATMENT_CALC_MAP[key];
     const q = win.quote?.[key] || {};
+    const q2 = win.quote?.blind2 || {};
 
     if (!meta.calcType) {
       return (
@@ -2259,13 +2280,15 @@ function EstimateSection({ win, onUpdate, quoteConfig, readOnly }) {
       );
     }
 
-    const price = computeTreatmentPrice(win, key, quoteConfig);
+    const price = resolveTreatmentPrice(win, key, quoteConfig);
     if (price) { totalLow += price.low; totalHigh += price.high; priced++; }
 
     return (
       <div className="card mb-16" key={key}>
         <div className="card-body">
-          <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 12 }}>{meta.label}</div>
+          <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 12 }}>
+            {meta.label}{key === "blind" && win.dual_blind ? " (Dual)" : ""}
+          </div>
 
           {(meta.calcType === "Sheer" || meta.calcType === "Drape") && (
             <>
@@ -2307,7 +2330,7 @@ function EstimateSection({ win, onUpdate, quoteConfig, readOnly }) {
             </>
           )}
 
-          {meta.calcType === "Roller blind" && (
+          {meta.calcType === "Roller blind" && !win.dual_blind && (
             <>
               <div style={{ marginBottom: 12 }}>
                 <span className="field-label">Fabric Category</span>
@@ -2317,6 +2340,38 @@ function EstimateSection({ win, onUpdate, quoteConfig, readOnly }) {
               </div>
               <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 13 }}>
                 <input type="checkbox" disabled={readOnly} checked={!!q.motorised} onChange={(e) => setQuote(key, "motorised", e.target.checked)} />
+                Motorised (+${quoteConfig.motorisation || 200})
+              </label>
+            </>
+          )}
+
+          {meta.calcType === "Roller blind" && win.dual_blind && (
+            <>
+              <div style={{ fontSize: 11, fontWeight: 700, color: "var(--warm-300)", textTransform: "uppercase", letterSpacing: "0.06em", marginBottom: 6 }}>
+                Panel 1
+              </div>
+              <div style={{ marginBottom: 12 }}>
+                <span className="field-label">Fabric Category</span>
+                <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginTop: 4 }}>
+                  {ROLLER_CATEGORIES.map((c) => optBtn(q.rollerCategory === c, () => setQuote("blind", "rollerCategory", c), c))}
+                </div>
+              </div>
+              <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 13, marginBottom: 16 }}>
+                <input type="checkbox" disabled={readOnly} checked={!!q.motorised} onChange={(e) => setQuote("blind", "motorised", e.target.checked)} />
+                Motorised (+${quoteConfig.motorisation || 200})
+              </label>
+
+              <div style={{ fontSize: 11, fontWeight: 700, color: "var(--warm-300)", textTransform: "uppercase", letterSpacing: "0.06em", marginBottom: 6 }}>
+                Panel 2
+              </div>
+              <div style={{ marginBottom: 12 }}>
+                <span className="field-label">Fabric Category</span>
+                <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginTop: 4 }}>
+                  {ROLLER_CATEGORIES.map((c) => optBtn(q2.rollerCategory === c, () => setQuote("blind2", "rollerCategory", c), c))}
+                </div>
+              </div>
+              <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 13 }}>
+                <input type="checkbox" disabled={readOnly} checked={!!q2.motorised} onChange={(e) => setQuote("blind2", "motorised", e.target.checked)} />
                 Motorised (+${quoteConfig.motorisation || 200})
               </label>
             </>
@@ -2374,12 +2429,14 @@ function WindowDetail({ job, window: win, windowIdx, totalWindows, onBack, onUpd
   const mainPhotoRef = useRef(null);
   const extraPhotoRef = useRef(null);
   const scrollRef = useRef(null);
+  const blindTapTimerRef = useRef(null);
   const [drawingPhoto, setDrawingPhoto] = useState(null);
   const [confirmDelete, setConfirmDelete] = useState(null);
 
   // Scroll to top when entering window or switching windows
   useEffect(() => {
     scrollRef.current?.scrollTo(0, 0);
+    clearTimeout(blindTapTimerRef.current);
   }, [windowIdx]);
 
   const handleMainPhoto = async (e) => {
@@ -2412,6 +2469,43 @@ function WindowDetail({ job, window: win, windowIdx, totalWindows, onBack, onUpd
 
   const updateMeas = (key, val) => {
     onUpdate({ measurements: { ...win.measurements, [key]: val } });
+  };
+
+  const toggleTreatment = (treatmentKey) => {
+    const current = win.treatments || [];
+    const isSelected = current.includes(treatmentKey);
+    const updated = isSelected ? current.filter((t) => t !== treatmentKey) : [...current, treatmentKey];
+    const extra = treatmentKey === "blind" && isSelected ? { dual_blind: false } : {};
+    onUpdate({ treatments: updated, ...extra });
+  };
+
+  const toggleDualBlind = () => {
+    const current = win.treatments || [];
+    if (win.dual_blind) {
+      onUpdate({ dual_blind: false });
+    } else {
+      const updated = current.includes("blind") ? current : [...current, "blind"];
+      onUpdate({ treatments: updated, dual_blind: true });
+    }
+  };
+
+  // Single tap toggles the treatment on/off; a second tap within 300ms on
+  // "blind" is treated as a double-tap that switches Dual mode instead.
+  const handleTreatmentTap = (treatmentKey) => {
+    if (treatmentKey !== "blind") {
+      toggleTreatment(treatmentKey);
+      return;
+    }
+    if (blindTapTimerRef.current) {
+      clearTimeout(blindTapTimerRef.current);
+      blindTapTimerRef.current = null;
+      toggleDualBlind();
+      return;
+    }
+    blindTapTimerRef.current = setTimeout(() => {
+      blindTapTimerRef.current = null;
+      toggleTreatment("blind");
+    }, 300);
   };
 
   return (
@@ -2555,30 +2649,27 @@ function WindowDetail({ job, window: win, windowIdx, totalWindows, onBack, onUpd
                 <span className="field-label">Treatments</span>
                 <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginTop: 4 }}>
                   {["Sheer", "Drape", "Blind", "Shutter", "Awning"].map((treatment) => {
+                    const treatmentKey = treatment.toLowerCase();
                     const treatments = win.treatments || [];
-                    const isSelected = treatments.includes(treatment.toLowerCase());
+                    const isSelected = treatments.includes(treatmentKey);
+                    const isDual = treatmentKey === "blind" && isSelected && win.dual_blind;
+                    const selectedColor = isDual ? "#7C3AED" : "var(--blue)";
                     return (
                       <button
                         key={treatment}
                         disabled={readOnly}
-                        onClick={() => {
-                          const current = win.treatments || [];
-                          const updated = isSelected
-                            ? current.filter((t) => t !== treatment.toLowerCase())
-                            : [...current, treatment.toLowerCase()];
-                          onUpdate({ treatments: updated });
-                        }}
+                        onClick={() => !readOnly && handleTreatmentTap(treatmentKey)}
                         className="btn"
                         style={{
                           flex: "1 0 calc(33.33% - 6px)", padding: "8px 4px", fontSize: 12,
-                          background: isSelected ? "var(--blue)" : "var(--warm-100)",
+                          background: isSelected ? selectedColor : "var(--warm-100)",
                           color: isSelected ? "#fff" : "var(--ink)",
-                          border: `1.5px solid ${isSelected ? "var(--blue)" : "var(--warm-200)"}`,
+                          border: `1.5px solid ${isSelected ? selectedColor : "var(--warm-200)"}`,
                           opacity: readOnly ? 0.8 : 1,
                           cursor: readOnly ? "not-allowed" : "pointer",
                         }}
                       >
-                        {isSelected && <Icons.Check size={12} />} {treatment}
+                        {isSelected && <Icons.Check size={12} />} {isDual ? "Dual Blind" : treatment}
                       </button>
                     );
                   })}

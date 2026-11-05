@@ -8,6 +8,58 @@ const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL || "";
 const SUPABASE_ANON_KEY = import.meta.env.VITE_SUPABASE_ANON_KEY || "";
 
 // ============================================================
+// PRICING CONFIG CACHE
+// The live quote_config is saved on the device after every successful load so
+// that, when a measurer is offline on site, estimates use the last prices this
+// device saw instead of the stale built-in DEFAULT_QUOTE_CONFIG.
+// pricingStatus: { source: "live" | "cached" | "default", savedAt: ISO string | null }
+// ============================================================
+const QUOTE_CONFIG_CACHE_KEY = "cmb_quote_config";
+
+function loadCachedQuoteConfig() {
+  try {
+    const raw = localStorage.getItem(QUOTE_CONFIG_CACHE_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    if (!parsed?.config || typeof parsed.config !== "object") return null;
+    return parsed;
+  } catch {
+    return null;
+  }
+}
+
+function saveCachedQuoteConfig(config) {
+  try {
+    localStorage.setItem(QUOTE_CONFIG_CACHE_KEY, JSON.stringify({ config, savedAt: new Date().toISOString() }));
+  } catch (err) {
+    console.warn("Could not cache quote config:", err.message);
+  }
+}
+
+function PricingStatusNote({ status }) {
+  if (!status || status.source === "live") return null;
+  const savedDate = status.savedAt
+    ? new Date(status.savedAt).toLocaleString("en-AU", { day: "numeric", month: "short", year: "numeric", hour: "numeric", minute: "2-digit" })
+    : null;
+  const message = status.source === "cached"
+    ? `Offline — using prices saved on this device on ${savedDate}. Reconnect to load current prices.`
+    : "Could not load current prices — these estimates use built-in prices and may be out of date. Connect to the internet and reopen the app before quoting.";
+  return (
+    <div
+      role="alert"
+      style={{
+        background: status.source === "cached" ? "#fff8e1" : "#fdecea",
+        border: `1px solid ${status.source === "cached" ? "#f5c842" : "#e53935"}`,
+        color: status.source === "cached" ? "#6b5a1a" : "#6b1a1a",
+        borderRadius: 8, padding: "8px 12px", fontSize: 12, fontWeight: 600, marginBottom: 12,
+      }}
+    >
+      ⚠ {message}
+    </div>
+  );
+}
+
+// ============================================================
 // ICONS (inline SVG components)
 // ============================================================
 const Icon = ({ d, size = 20, color = "currentColor", ...props }) => (
@@ -1013,7 +1065,16 @@ export default function App() {
   const [lastRefresh, setLastRefresh] = useState(null);
   const [refreshing, setRefreshing] = useState(false);
   const [activeTab, setActiveTab] = useState("active"); // "active" | "completed" | "deleted"
-  const [quoteConfig, setQuoteConfig] = useState(DEFAULT_QUOTE_CONFIG);
+  // Start from the last prices this device loaded (if any) so offline estimates
+  // match the estimator app as closely as possible; replaced by live prices on load.
+  const [initialPricing] = useState(() => {
+    const cached = loadCachedQuoteConfig();
+    return cached
+      ? { config: { ...DEFAULT_QUOTE_CONFIG, ...cached.config }, status: { source: "cached", savedAt: cached.savedAt || null } }
+      : { config: DEFAULT_QUOTE_CONFIG, status: { source: "default", savedAt: null } };
+  });
+  const [quoteConfig, setQuoteConfig] = useState(initialPricing.config);
+  const [pricingStatus, setPricingStatus] = useState(initialPricing.status);
 
   const STATUS_OPTIONS = ["In Progress", "Approved", "Rejected", "Uncontactable", "Delayed"];
 
@@ -1150,23 +1211,39 @@ export default function App() {
   }, []);
 
   // Load live pricing config from the same Supabase project the estimator app uses,
-  // falling back to DEFAULT_QUOTE_CONFIG if unset/unreachable.
+  // falling back to the last cached copy (or DEFAULT_QUOTE_CONFIG) if unreachable.
+  // Retries whenever the device comes back online or the app is reopened.
   useEffect(() => {
     if (!SUPABASE_URL || !SUPABASE_ANON_KEY) return;
-    (async () => {
+    let cancelled = false;
+    let loadedLive = false;
+    const loadLivePricing = async () => {
+      if (loadedLive) return;
       try {
         const res = await fetch(`${SUPABASE_URL}/rest/v1/quote_config?id=eq.1&select=config`, {
           headers: { apikey: SUPABASE_ANON_KEY, Authorization: `Bearer ${SUPABASE_ANON_KEY}` },
         });
-        if (!res.ok) return;
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
         const rows = await res.json();
-        if (Array.isArray(rows) && rows[0]?.config) {
-          setQuoteConfig({ ...DEFAULT_QUOTE_CONFIG, ...rows[0].config });
-        }
+        if (!Array.isArray(rows) || !rows[0]?.config) throw new Error("No quote config row");
+        if (cancelled) return;
+        loadedLive = true;
+        setQuoteConfig({ ...DEFAULT_QUOTE_CONFIG, ...rows[0].config });
+        setPricingStatus({ source: "live", savedAt: new Date().toISOString() });
+        saveCachedQuoteConfig(rows[0].config);
       } catch (err) {
-        console.warn("Failed to load quote config, using defaults:", err);
+        console.warn("Failed to load live quote config, using cached/default prices:", err);
       }
-    })();
+    };
+    const onVisible = () => { if (document.visibilityState === "visible") loadLivePricing(); };
+    loadLivePricing();
+    window.addEventListener("online", loadLivePricing);
+    document.addEventListener("visibilitychange", onVisible);
+    return () => {
+      cancelled = true;
+      window.removeEventListener("online", loadLivePricing);
+      document.removeEventListener("visibilitychange", onVisible);
+    };
   }, []);
 
   // Persist to localStorage
@@ -1927,6 +2004,7 @@ export default function App() {
                         ))}
 
                         <div style={{ marginTop: 8, paddingTop: 12, borderTop: "1.5px solid var(--warm-200)", textAlign: "center" }}>
+                          <PricingStatusNote status={pricingStatus} />
                           <div className="text-sm text-muted" style={{ marginBottom: 4 }}>Job total estimate · inc. GST</div>
                           <div style={{ fontSize: 24, fontWeight: 700 }}>
                             {jobQuote.pricedCount > 0 ? `$${fmtPrice(jobQuote.totalLow)} – $${fmtPrice(jobQuote.totalHigh)}` : "—"}
@@ -2041,6 +2119,7 @@ export default function App() {
             onSave={() => syncJob(currentJob.id)}
             readOnly={isLocked}
             quoteConfig={quoteConfig}
+            pricingStatus={pricingStatus}
             onNext={() => {
               if (currentWindowIdx < currentJob.windows.length - 1) {
                 setCurrentWindowIdx(currentWindowIdx + 1);
@@ -2214,7 +2293,7 @@ function getJobQuoteBreakdown(job, quoteConfig) {
   return { rows, totalLow, totalHigh, pricedCount, excludedWindows };
 }
 
-function EstimateSection({ win, onUpdate, quoteConfig, readOnly }) {
+function EstimateSection({ win, onUpdate, quoteConfig, pricingStatus, readOnly }) {
   const treatments = win.treatments || [];
   const quotable = treatments.filter((t) => TREATMENT_CALC_MAP[t]);
   if (quotable.length === 0) return null;
@@ -2409,6 +2488,7 @@ function EstimateSection({ win, onUpdate, quoteConfig, readOnly }) {
           Estimate
         </span>
       </div>
+      <PricingStatusNote status={pricingStatus} />
       {cards}
       {priced > 0 && (
         <div className="card mb-16" style={{ background: "var(--accent-bg)", borderColor: "var(--accent)" }}>
@@ -2425,7 +2505,7 @@ function EstimateSection({ win, onUpdate, quoteConfig, readOnly }) {
   );
 }
 
-function WindowDetail({ job, window: win, windowIdx, totalWindows, onBack, onUpdate, onDelete, onDeletePhoto, onSave, readOnly, onNext, onPrev, showToast, quoteConfig }) {
+function WindowDetail({ job, window: win, windowIdx, totalWindows, onBack, onUpdate, onDelete, onDeletePhoto, onSave, readOnly, onNext, onPrev, showToast, quoteConfig, pricingStatus }) {
   const mainPhotoRef = useRef(null);
   const extraPhotoRef = useRef(null);
   const scrollRef = useRef(null);
@@ -3028,7 +3108,7 @@ function WindowDetail({ job, window: win, windowIdx, totalWindows, onBack, onUpd
           )}
 
           {/* Estimate */}
-          <EstimateSection win={win} onUpdate={onUpdate} quoteConfig={quoteConfig} readOnly={readOnly} />
+          <EstimateSection win={win} onUpdate={onUpdate} quoteConfig={quoteConfig} pricingStatus={pricingStatus} readOnly={readOnly} />
 
           {/* Surrounds - shown for all types */}
           <div className="meas-section-header">
